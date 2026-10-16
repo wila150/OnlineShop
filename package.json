@@ -1,0 +1,14 @@
+{
+  "name": "online-shop",
+  "private": true,
+  "type": "module",
+  "description": "網路商店：前台購物網站 + 管理後台（Firebase）",
+  "scripts": {
+    "dev": "PATH=/usr/local/opt/openjdk@21/bin:$PATH firebase emulators:start --project demo-onlineshop --export-on-exit=.emulator-data $( [ -f .emulator-data/firebase-export-metadata.json ] && echo --import=.emulator-data )",
+    "seed": "node scripts/seed.js",
+    "deploy": "firebase deploy"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.32.1"
+  }
+}

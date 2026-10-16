@@ -1,0 +1,8 @@
+node_modules/
+.emulator-data/
+*-debug.log
+.DS_Store
+# 正式上線用的設定（OWNER_EMAILS 等）不要上傳；.env.local 只給本機模擬器用，可以上傳
+functions/.env
+# meepShop 參考截圖含真實顧客資料，只留在本機
+參考介面/

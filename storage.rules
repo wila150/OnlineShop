@@ -1,0 +1,12 @@
+rules_version = '2';
+// 媒體櫃圖片公開可讀；上傳一律經過後台 API
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /media/{file=**} {
+      allow read: if true;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>網路商店</title>
+<meta name="description" content="">
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/blocks.css">
+<link rel="stylesheet" href="/store.css">
+</head>
+<body>
+<div id="announce" hidden></div>
+<header class="site-head">
+  <div class="head-in">
+    <button class="icon-btn menu-open" aria-label="選單" id="menuOpen"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    <a class="logo" href="/" id="logo"></a>
+    <nav class="top-nav" id="topNav" aria-label="主選單"></nav>
+    <div class="head-tools">
+      <form class="search" id="searchForm" role="search"><input type="search" name="q" placeholder="搜尋商品" aria-label="搜尋商品"><button class="icon-btn" aria-label="搜尋"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button></form>
+      <a class="icon-btn" href="/account" aria-label="會員" id="accountLink"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></a>
+      <a class="icon-btn cart-link" href="/cart" aria-label="購物車"><svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13H7L6 7Z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg><i id="cartCount" hidden>0</i></a>
+    </div>
+  </div>
+</header>
+<div class="layout" id="layout">
+  <aside class="side-nav" id="sideNav" aria-label="分類選單"></aside>
+  <main id="main" tabindex="-1"><div class="loading">載入中…</div></main>
+</div>
+<footer class="site-foot" id="foot"></footer>
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-bg" data-close></div>
+  <div class="drawer-panel">
+    <button class="icon-btn drawer-x" data-close aria-label="關閉"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <div id="drawerBody"></div>
+  </div>
+</div>
+<div class="modal" id="modal" hidden><div class="modal-bg" data-close></div><div class="modal-box" id="modalBox" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/store.js"></script>
+</body>
+</html>
