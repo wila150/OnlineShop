@@ -1,5 +1,5 @@
 // 訂單：列表（分頁籤、搜尋、篩選、批次處理、匯出、上傳物流編號）與訂單詳情
-import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, promptBox, go } from './app.js';
+import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, promptBox, go, can } from './app.js';
 
 const STATUS = { processing: '處理中', preparing: '備貨中', shipped: '已出貨', returning: '退換貨', closed: '訂單結案', cancelled: '已取消' };
 const PAY = { unpaid: '等待付款', paid: '對帳完成', failed: '付款失敗', refunded: '已退款' };
@@ -14,8 +14,8 @@ export async function list(el) {
 
   el.innerHTML = `
     <div class="page-head"><h1>訂單</h1><div class="actions">
-      <button class="btn" id="trkBtn">${icon('upload')}上傳物流編號</button>
-      <button class="btn" id="expBtn">${icon('download')}匯出</button>
+      <button class="btn" id="trkBtn" ${can('ordersEdit') ? '' : 'hidden'}>${icon('upload')}上傳物流編號</button>
+      <button class="btn" id="expBtn" ${can('ordersExport') ? '' : 'hidden'}>${icon('download')}匯出</button>
     </div></div>
     <div class="card">
       <div class="tabs" id="tabs"></div>
@@ -60,14 +60,14 @@ export async function list(el) {
 
   const drawBulk = () => {
     const b = $('#bulk', el);
-    if (!selected.length) { b.innerHTML = ''; return; }
+    if (!selected.length || !(can('ordersEdit') || can('ordersExport'))) { b.innerHTML = ''; return; }
     b.innerHTML = `<div class="bulk">已選 ${selected.length} 筆
-      <select class="input" id="bk" style="width:auto"><option value="">批次操作…</option>
+      <select ${can('ordersEdit') ? '' : 'hidden'} class="input" id="bk" style="width:auto"><option value="">批次操作…</option>
         <optgroup label="訂單狀態">${Object.entries(STATUS).map(([k, v]) => `<option value="status:${k}">改為「${v}」</option>`).join('')}</optgroup>
         <optgroup label="帳款狀態">${Object.entries(PAY).map(([k, v]) => `<option value="payStatus:${k}">帳款改為「${v}」</option>`).join('')}</optgroup>
         <optgroup label="運送狀態">${Object.entries(SHIP).map(([k, v]) => `<option value="shipStatus:${k}">運送改為「${v}」</option>`).join('')}</optgroup>
         <option value="tag">加上標籤…</option>
-      </select><button class="btn sm primary" id="bkGo">套用</button><button class="btn sm" id="bkExp">${icon('download')}匯出選取</button></div>`;
+      </select><button class="btn sm primary" id="bkGo" ${can('ordersEdit') ? '' : 'hidden'}>套用</button><button class="btn sm" id="bkExp" ${can('ordersExport') ? '' : 'hidden'}>${icon('download')}匯出選取</button></div>`;
     $('#bkExp', b).onclick = () => api.download('exportOrders', { nos: selected.join(',') });
     $('#bkGo', b).onclick = async (e) => {
       const v = $('#bk', b).value;
@@ -130,7 +130,7 @@ export async function detail(el, no) {
     <a class="back" href="/admin/orders">‹ 回訂單列表</a>
     <div class="page-head"><h1>訂單 ${esc(o.no)}</h1>
       <span>${pill(STATUS[o.status], cls[o.status])} ${pill(PAY[o.payment.status], cls[o.payment.status])} ${pill(SHIP[o.shipStatus], cls[o.shipStatus])}</span>
-      <div class="actions"><button class="btn" id="printBtn">列印出貨單</button>${o.status !== 'cancelled' ? '<button class="btn danger" id="cancelBtn">取消訂單</button>' : ''}</div>
+      <div class="actions"><button class="btn" id="printBtn">列印出貨單</button>${o.status !== 'cancelled' && can('ordersEdit') ? '<button class="btn danger" id="cancelBtn">取消訂單</button>' : ''}</div>
       <div class="sub">下單時間 ${fmt.time(o.createdAt)}</div></div>
     ${o.returnReq ? `<div class="card" style="border-color:var(--bad);margin-bottom:16px"><h2>${icon('bell')}顧客申請${o.returnReq.type === 'return' ? '退貨' : '換貨'} ${pill(o.returnReq.status === 'pending' ? '待處理' : '已受理', o.returnReq.status === 'pending' ? 'bad' : 'ok')}</h2><p style="margin:0;white-space:pre-wrap">${esc(o.returnReq.reason)}</p><p class="muted small">${fmt.time(o.returnReq.at)}</p>${o.returnReq.status === 'pending' ? '<button class="btn primary" id="acceptRet">受理（訂單改為退換貨）</button>' : ''}</div>` : ''}
     <div class="split">
@@ -142,24 +142,24 @@ export async function detail(el, no) {
             ${o.pointsUsed ? `<div><span>購物金折抵（${o.pointsUsed} 點）</span><span class="err">−${money(o.pointsValue)}</span></div>` : ''}
             <div><span>運費（${esc(o.shipping.name)}）</span><span>${money(o.shipping.fee)}</span></div>
             <div class="total"><span>訂單金額</span><span>${money(o.total)}</span></div>
-            <div class="muted small"><span>商品成本 ${money(o.cost)}・估計毛利 ${money(o.total - o.cost - o.shipping.fee)}</span>${o.earn ? `<span>結案後回饋購物金 ${o.earn} 點${o.earned ? '（已發放）' : ''}</span>` : ''}</div>
+            <div class="muted small">${o.cost == null ? '' : `<span>商品成本 ${money(o.cost)}・估計毛利 ${money(o.total - o.cost - o.shipping.fee)}</span>`}${o.earn ? `<span>結案後回饋購物金 ${o.earn} 點${o.earned ? '（已發放）' : ''}</span>` : ''}</div>
           </div>
         </div>
         <div class="card"><h2>訂單問答</h2>
           <div class="chat" id="chat">${o.msgs.length ? o.msgs.map((m) => `<div class="m ${m.from}"><small>${m.from === 'admin' ? esc(m.name || '客服') : esc(m.name)}・${fmt.time(m.at)}</small>${esc(m.text)}</div>`).join('') : '<p class="muted">還沒有訊息</p>'}</div>
-          <form class="reply" id="msgF"><textarea class="input" name="text" placeholder="回覆顧客（顧客會在訂單頁看到）" required></textarea><button class="btn primary">送出</button></form>
+          <form class="reply" id="msgF" ${can('ordersEdit') || can('messages') ? '' : 'hidden'}><textarea class="input" name="text" placeholder="回覆顧客（顧客會在訂單頁看到）" required></textarea><button class="btn primary">送出</button></form>
         </div>
         <div class="card"><h2>處理紀錄</h2><ul class="timeline">${(o.log || []).map((l) => `<li>${esc(l.text)}<small>${fmt.time(l.at)}・${esc(l.by)}</small></li>`).join('')}</ul></div>
       </div>
       <div>
-        <form class="card" id="stF"><h2>狀態</h2>
+        <form class="card" id="stF"><h2>狀態</h2><fieldset ${can('ordersEdit') ? '' : 'disabled'} style="border:0;padding:0;margin:0">
           <label class="field"><span>訂單狀態</span>${o.status === 'cancelled' ? '<input class="input" value="已取消" disabled>' : sel('status', Object.fromEntries(Object.entries(STATUS).filter(([k]) => k !== 'cancelled')), o.status)}</label>
           <label class="field"><span>帳款狀態</span>${sel('payStatus', PAY, o.payment.status)}</label>
           <label class="field"><span>運送狀態</span>${sel('shipStatus', SHIP, o.shipStatus)}</label>
           <label class="field"><span>物流編號</span><input class="input" name="trackingNo" value="${esc(o.trackingNo)}"></label>
           <label class="field"><span>標籤（用逗號分開）</span><input class="input" name="tags" value="${esc((o.tags || []).join(', '))}"></label>
           <label class="field"><span>後台備註（顧客看不到）</span><textarea class="input" name="adminNote">${esc(o.adminNote)}</textarea></label>
-          <button class="btn primary block">儲存</button>
+          ${can('ordersEdit') ? '<button class="btn primary block">儲存</button>' : '<p class="muted small">您的角色只能查看訂單</p>'}</fieldset>
         </form>
         <div class="card"><h2>訂購人</h2><dl class="dl">
           <dt>姓名</dt><dd>${c ? `<a href="/admin/customers/${esc(c.uid)}">${esc(o.buyer.name)}</a>` : esc(o.buyer.name) + ' <span class="pill">訪客</span>'}</dd>

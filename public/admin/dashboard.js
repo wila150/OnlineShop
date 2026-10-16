@@ -20,7 +20,7 @@ export async function dashboard(el) {
         <div class="hero">
           <small>本月營收（已付款）</small>
           <div class="big">${money(d.revenue)}</div>
-          <div class="kpis"><div><small>本月訂單</small><b>${d.monthOrders}</b></div><div><small>今日訂單</small><b>${d.todayOrders}</b></div><div><small>本月毛利（估）</small><b>${money(d.profit)}</b></div></div>
+          <div class="kpis"><div><small>本月訂單</small><b>${d.monthOrders}</b></div><div><small>今日訂單</small><b>${d.todayOrders}</b></div>${d.profit == null ? '' : `<div><small>本月毛利（估）</small><b>${money(d.profit)}</b></div>`}</div>
           <div class="chart" role="img" aria-label="近 30 天每日營收">${d.series.map((x) => `<div class="bar" style="height:${Math.round((x.amount / max) * 100)}%" data-tip="${x.d.slice(5)}　${money(x.amount)}・${x.orders} 筆"></div>`).join('')}</div>
           <small>近 30 天每日營收</small>
         </div>

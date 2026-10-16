@@ -9,7 +9,7 @@ const CARDS = [
   ['shipping', 'truck', '物流管理', '運送方式、運費、免運門檻'],
   ['third', 'plug', '第三方設定', 'Google Analytics、社群連結'],
   ['notify', 'bell', '通知設定', '庫存不足提醒'],
-  ['accounts', 'key', '後台帳號', '員工 Google 帳號與權限'],
+  ['accounts', 'key', '後台帳號與權限', '員工帳號、角色、每個角色能用的功能'],
 ];
 
 export async function index(el) {
@@ -68,33 +68,86 @@ export async function section(el, name) {
 }
 
 async function accounts(el) {
-  const { admins, roles } = await api.get('admins');
-  const DESC = { owner: '全部功能，包含後台帳號', manager: '後台帳號以外的全部功能', service: '總覽、訂單、訊息、顧客', editor: '總覽、商品、商店設計、媒體櫃、行銷' };
-  el.innerHTML = `<a class="back" href="/admin/settings">‹ 回設定</a><div class="page-head"><h1>後台帳號</h1><div class="sub">員工用自己的 Google 帳號登入，不用設密碼。老闆帳號在部署時的 OWNER_EMAILS 設定。</div></div>
-    <div class="card"><div class="table-wrap"><table class="tbl"><thead><tr><th>Email</th><th>名稱</th><th>角色</th><th>狀態</th><th></th></tr></thead><tbody>
-      ${admins.map((a) => `<tr data-e="${esc(a.email)}"><td>${esc(a.email)}</td><td>${esc(a.name || '')}</td><td>${a.fixed ? pill(roles.owner, 'accent') : `<select class="input" data-role style="width:auto">${Object.entries(roles).filter(([k]) => k !== 'owner').map(([k, n]) => `<option value="${k}"${a.role === k ? ' selected' : ''}>${n}</option>`).join('')}</select>`}</td><td>${a.fixed ? '' : sw('', !a.disabled, 'data-on')}</td><td class="right">${a.fixed ? '' : `<button class="btn sm danger" data-rm aria-label="移除">${icon('trash')}</button>`}</td></tr>`).join('')}
-    </tbody></table></div></div>
-    <form class="card" id="af"><h2>新增員工</h2><div class="row"><label class="field"><span>Gmail</span><input class="input" type="email" name="email" required></label><label class="field"><span>名稱</span><input class="input" name="name"></label><label class="field"><span>角色</span><select class="input" name="role">${Object.entries(roles).filter(([k]) => k !== 'owner').map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></label></div>
-      <p class="muted small">${Object.entries(DESC).map(([k, d]) => `<b>${roles[k]}</b>：${d}`).join('<br>')}</p><button class="btn primary">新增</button></form>`;
-  const row = (e) => admins.find((a) => a.email === e.target.closest('tr').dataset.e);
-  el.querySelector('tbody').addEventListener('change', async (e) => {
-    const a = row(e);
-    if (e.target.matches('[data-role]')) a.role = e.target.value;
-    if (e.target.matches('[data-on]')) a.disabled = !e.target.checked;
-    await api.post('adminSave', a);
-    toast('已更新');
-  });
-  el.querySelector('tbody').addEventListener('click', async (e) => {
-    if (!e.target.closest('[data-rm]')) return;
-    const a = row(e);
-    if (!(await confirmBox(`移除 ${a.email} 的後台權限？`, { danger: true, ok: '移除' }))) return;
-    await api.post('adminRemove', { email: a.email });
-    accounts(el);
-  });
-  $('#af', el).onsubmit = async (e) => {
-    e.preventDefault();
-    await busy(e.submitter, () => api.post('adminSave', Object.fromEntries(new FormData(e.target))));
-    toast('已新增');
-    accounts(el);
+  const r = await api.get('admins');
+  let { admins, roles } = r;
+  const { perms } = r;
+  let draft = JSON.parse(JSON.stringify(roles)); // 權限表的修改，按「儲存權限」才送出
+  let dirty = false;
+  guard(() => dirty);
+  const roleOpts = (cur) => roles.map((x) => `<option value="${esc(x.id)}"${cur === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
+  const groups = [...new Set(perms.map((p) => p.group))];
+
+  const draw = () => {
+    el.innerHTML = `<a class="back" href="/admin/settings">‹ 回設定</a><div class="page-head"><h1>後台帳號與權限</h1><div class="sub">員工用自己的 Google 帳號登入，不用設密碼。每位員工屬於一個角色，角色能用哪些功能在下面的權限表勾選。老闆帳號在部署時的 OWNER_EMAILS 設定，永遠擁有全部權限。</div></div>
+    <div class="card"><h2>員工</h2><div class="table-wrap"><table class="tbl"><thead><tr><th>Email</th><th>名稱</th><th>角色</th><th>啟用</th><th></th></tr></thead><tbody id="ab">
+      ${admins.map((a) => `<tr data-e="${esc(a.email)}"><td>${esc(a.email)}</td><td>${a.fixed ? '' : `<input class="input" data-name value="${esc(a.name || '')}" style="max-width:160px">`}</td><td>${a.fixed ? pill('老闆', 'accent') : `<select class="input" data-role style="width:auto">${roleOpts(a.role)}</select>`}</td><td>${a.fixed ? '' : sw('', !a.disabled, 'data-on')}</td><td class="right">${a.fixed ? '' : `<button class="btn sm danger" data-rm aria-label="移除">${icon('trash')}</button>`}</td></tr>`).join('')}
+    </tbody></table></div>
+    <form id="af" style="margin-top:16px"><div class="row"><label class="field"><span>新增員工的 Gmail</span><input class="input" type="email" name="email" required></label><label class="field"><span>名稱</span><input class="input" name="name"></label><label class="field"><span>角色</span><select class="input" name="role">${roleOpts(roles[0]?.id)}</select></label></div><button class="btn primary">${icon('plus')}新增員工</button></form></div>
+
+    <div class="card"><div class="card-h">角色與權限<div class="actions"><button class="btn sm" id="addRole">${icon('plus')}新增角色</button><button class="btn sm primary" id="saveRoles" ${dirty ? '' : 'disabled'}>儲存權限</button></div></div>
+      <p class="muted small" style="margin-top:-6px">勾選每個角色可以使用的功能。「處理訂單」「匯出訂單」會自動包含「查看訂單」；沒有「成本與毛利」的角色看不到商品成本。</p>
+      <div class="table-wrap"><table class="tbl" id="pt"><thead><tr><th style="min-width:220px;vertical-align:top">功能</th><th class="right" style="min-width:70px;vertical-align:top">老闆</th>
+        ${draft.map((x, i) => `<th class="right" style="min-width:120px;vertical-align:top"><input class="input" data-rn="${i}" value="${esc(x.name)}" aria-label="角色名稱" style="text-align:right;font-weight:700;min-height:30px;padding:2px 6px">${draft.length > 1 ? `<div><button type="button" class="linkbtn danger small" data-rd="${i}" style="font-weight:400;margin-top:4px">刪除角色</button></div>` : ''}</th>`).join('')}</tr></thead><tbody>
+        ${groups.map((g) => `<tr><td colspan="${draft.length + 2}" style="background:var(--sunk);font-weight:700;font-size:.85rem">${esc(g)}</td></tr>` + perms.filter((p) => p.group === g).map((p) => `<tr><td><b style="font-weight:500">${esc(p.name)}</b><div class="muted small">${esc(p.desc)}</div></td><td class="right"><input type="checkbox" checked disabled aria-label="老闆：${esc(p.name)}"></td>
+          ${draft.map((x, i) => `<td class="right"><input type="checkbox" data-pi="${i}" data-pk="${p.key}" ${x.perms.includes(p.key) ? 'checked' : ''} aria-label="${esc(x.name)}：${esc(p.name)}"></td>`).join('')}</tr>`).join('')).join('')}
+      </tbody></table></div></div>`;
+
+    const row = (e) => admins.find((a) => a.email === e.target.closest('tr').dataset.e);
+    $('#ab', el).addEventListener('change', async (e) => {
+      const a = row(e);
+      if (e.target.matches('[data-role]')) a.role = e.target.value;
+      if (e.target.matches('[data-on]')) a.disabled = !e.target.checked;
+      if (e.target.matches('[data-name]')) a.name = e.target.value;
+      try { admins = (await api.post('adminSave', a)).admins; toast('已更新'); } catch (err) { toast(err.message, true); }
+    });
+    $('#ab', el).addEventListener('click', async (e) => {
+      if (!e.target.closest('[data-rm]')) return;
+      const a = row(e);
+      if (!(await confirmBox(`移除 ${a.email} 的後台權限？`, { danger: true, ok: '移除' }))) return;
+      admins = (await api.post('adminRemove', { email: a.email })).admins;
+      draw();
+    });
+    $('#af', el).onsubmit = async (e) => {
+      e.preventDefault();
+      admins = (await busy(e.submitter, () => api.post('adminSave', Object.fromEntries(new FormData(e.target))))).admins;
+      toast('已新增，請對方用這個 Gmail 登入後台');
+      draw();
+    };
+
+    const pt = $('#pt', el);
+    const mark = () => { dirty = true; $('#saveRoles', el).disabled = false; };
+    pt.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t.dataset.pk) {
+        const x = draft[+t.dataset.pi];
+        x.perms = t.checked ? [...new Set([...x.perms, t.dataset.pk])] : x.perms.filter((k) => k !== t.dataset.pk);
+        // 處理／匯出一定要能查看；取消查看就一起取消
+        const fix = (base) => { if (x.perms.some((k) => k.startsWith(base) && k !== base) && !x.perms.includes(base)) { if (t.dataset.pk === base) x.perms = x.perms.filter((k) => !k.startsWith(base)); else x.perms.push(base); } };
+        fix('orders'); fix('customers');
+        mark();
+        draw();
+      }
+    });
+    pt.addEventListener('input', (e) => { if (e.target.dataset.rn) { draft[+e.target.dataset.rn].name = e.target.value; mark(); } });
+    pt.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-rd]');
+      if (!b) return;
+      const x = draft[+b.dataset.rd];
+      if (admins.some((a) => a.role === x.id)) return toast(`還有員工是「${x.name}」，請先把他們改成別的角色`, true);
+      if (!(await confirmBox(`刪除角色「${x.name}」？`, { danger: true, ok: '刪除' }))) return;
+      if (roles.some((r) => r.id === x.id)) roles = (await api.post('roleDelete', { id: x.id })).roles;
+      draft.splice(+b.dataset.rd, 1);
+      draw();
+    });
+    $('#addRole', el).onclick = () => { draft.push({ id: '', name: '新角色', perms: ['dashboard'] }); mark(); draw(); $$('[data-rn]', el).pop()?.select(); };
+    $('#saveRoles', el).onclick = async (e) => {
+      if (draft.some((x) => !x.name.trim())) return toast('每個角色都要有名稱', true);
+      await busy(e.currentTarget, async () => { for (const x of draft) roles = (await api.post('roleSave', { id: x.id || undefined, name: x.name, perms: x.perms })).roles; });
+      draft = JSON.parse(JSON.stringify(roles));
+      dirty = false;
+      toast('權限已儲存，員工重新整理後台就會生效');
+      draw();
+    };
   };
+  draw();
 }

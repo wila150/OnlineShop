@@ -5,7 +5,7 @@ import * as O from '../lib/orders.js';
 import * as C from '../lib/customers.js';
 import * as M from '../lib/media.js';
 import { quote, context } from '../lib/pricing.js';
-import { admin, need, ROLES, listAdmins, saveAdmin, removeAdmin } from '../lib/auth.js';
+import { admin, need, can, PERMS, listRoles, listAdmins, saveAdmin, removeAdmin, saveRole, removeRole } from '../lib/auth.js';
 import { json, fail, readJSON, UserError, str, num, int, id } from '../lib/http.js';
 
 const csvResponse = (rows, name) => new Response(C.csv(rows), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'Cache-Control': 'no-store' } });
@@ -148,7 +148,7 @@ async function deleteDoc(col, docId) {
 const GETS = {
   async me(me) {
     const store = await S.get('store');
-    return { me: { ...me, roleName: ROLES[me.role] }, store: { name: store.name, logo: store.logo } };
+    return { me, store: { name: store.name, logo: store.logo } };
   },
 
   async dashboard(me) {
@@ -168,7 +168,7 @@ const GETS = {
     for (const o of month.filter(counted)) for (const l of o.items) sales.set(l.pid, { name: l.name, img: l.img, qty: (sales.get(l.pid)?.qty || 0) + l.qty, amount: (sales.get(l.pid)?.amount || 0) + l.amount });
     return {
       revenue: month.filter(counted).reduce((a, o) => a + o.total, 0),
-      profit: month.filter(counted).reduce((a, o) => a + o.total - (o.cost || 0) - (o.shipping?.fee || 0), 0),
+      profit: can(me, 'cost') ? month.filter(counted).reduce((a, o) => a + o.total - (o.cost || 0) - (o.shipping?.fee || 0), 0) : null,
       todo: {
         pending: orders.filter((o) => o.status === 'processing').length,
         unshipped: orders.filter((o) => !['cancelled', 'closed'].includes(o.status) && o.shipStatus === 'unshipped' && (o.payment.status === 'paid' || o.payment.id === 'cod')).length,
@@ -202,11 +202,12 @@ const GETS = {
     if (!o) throw new UserError('找不到訂單', 404);
     if (o.adminUnread) await D.db().doc('orders/' + o.no).update({ adminUnread: false });
     const cust = o.uid ? await D.one('customers', o.uid) : null;
+    if (!can(me, 'cost')) { delete o.cost; o.items = o.items.map(({ cost, ...l }) => l); o.addonItems = (o.addonItems || []).map(({ cost, ...l }) => l); }
     return { order: o, customer: cust && { uid: cust.uid, name: cust.name, email: cust.email, orders: cust.stats?.orders || 0, spent: cust.stats?.spent || 0, blacklisted: cust.blacklisted, points: cust.points || 0 }, STATUS: O.STATUS, PAY: O.PAY, SHIP: O.SHIP };
   },
 
   async exportOrders(me, q) {
-    need(me, 'orders');
+    need(me, 'ordersExport');
     const all = (await D.all('orders')).sort((a, b) => b.createdAt - a.createdAt);
     const nos = q.get('nos') ? q.get('nos').split(',') : null;
     const list = nos ? all.filter((o) => nos.includes(o.no)) : filterOrders(all, q);
@@ -216,21 +217,23 @@ const GETS = {
   async products(me) {
     need(me, 'products');
     const list = (await D.all('products')).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    return { rows: list.map((p) => ({ id: p.id, name: p.name, sku: p.sku, img: p.images?.[0] || '', on: p.on, tags: p.tags || [], specs: p.specs?.length ? p.variants.length : 0, price: p.price, cost: p.cost || p.variants?.[0]?.cost || 0, stock: p.stock, sold: p.sold || 0, updatedAt: p.updatedAt })) };
+    return { rows: list.map((p) => ({ id: p.id, name: p.name, sku: p.sku, img: p.images?.[0] || '', on: p.on, tags: p.tags || [], specs: p.specs?.length ? p.variants.length : 0, price: p.price, cost: can(me, 'cost') ? p.cost || p.variants?.[0]?.cost || 0 : null, stock: p.stock, sold: p.sold || 0, updatedAt: p.updatedAt })) };
   },
 
   async product(me, q) {
     need(me, 'products');
     const p = await D.one('products', id(q.get('id')));
     if (!p) throw new UserError('找不到商品', 404);
-    return { product: p };
+    if (!can(me, 'cost')) { delete p.cost; p.variants = p.variants.map(({ cost, ...v }) => v); }
+    return { product: p, canCost: can(me, 'cost') };
   },
 
   async exportProducts(me) {
     need(me, 'products');
     const list = await D.all('products');
-    const rows = [['商品ID', '商品名稱', '商品編號', '規格', '規格編號', '售價', '原價', '成本', '庫存', '狀態', '標籤']];
-    for (const p of list) for (const v of p.variants || []) rows.push([p.id, p.name, p.sku, v.key, v.sku, v.price, v.listPrice || p.listPrice, v.cost, v.stock, p.on ? '上架' : '下架', (p.tags || []).join('、')]);
+    const c = can(me, 'cost');
+    const rows = [['商品ID', '商品名稱', '商品編號', '規格', '規格編號', '售價', '原價', ...(c ? ['成本'] : []), '庫存', '狀態', '標籤']];
+    for (const p of list) for (const v of p.variants || []) rows.push([p.id, p.name, p.sku, v.key, v.sku, v.price, v.listPrice || p.listPrice, ...(c ? [v.cost] : []), v.stock, p.on ? '上架' : '下架', (p.tags || []).join('、')]);
     return csvResponse(rows, `商品_${D.twDate()}.csv`);
   },
 
@@ -262,7 +265,7 @@ const GETS = {
   },
 
   async exportCustomers(me, q) {
-    need(me, 'customers');
+    need(me, 'customersExport');
     const [list, groups] = await Promise.all([D.all('customers'), D.groups()]);
     let rows = list;
     if (q.get('seg')) rows = C.segmentsOf(list)[q.get('seg')]?.list || [];
@@ -330,7 +333,7 @@ const GETS = {
 
   async admins(me) {
     need(me, 'accounts');
-    return { admins: await listAdmins(), roles: ROLES };
+    return { admins: await listAdmins(), roles: await listRoles(), perms: PERMS };
   },
 
   // 商品選擇器（頁面設計、行銷都會用）
@@ -343,13 +346,15 @@ const GETS = {
 /* ---------- 寫 ---------- */
 const POSTS = {
   async orderUpdate(me, b) {
-    need(me, 'orders');
+    // 訊息中心只能加星號標記
+    if (Object.keys(b).every((k) => ['a', 'no', 'flagged'].includes(k)) && can(me, 'messages')) return { order: await O.update(id(b.no), { flagged: b.flagged }, me.name) };
+    need(me, 'ordersEdit');
     if (b.status === 'cancelled') return { order: await O.cancel(id(b.no), me.name, str(b.reason, 100)) };
     return { order: await O.update(id(b.no), b, me.name) };
   },
 
   async ordersBulk(me, b) {
-    need(me, 'orders');
+    need(me, 'ordersEdit');
     const nos = (b.nos || []).map(id).slice(0, 200);
     const errors = [];
     for (const no of nos) {
@@ -363,7 +368,7 @@ const POSTS = {
 
   // 上傳物流編號：每行「訂單編號,物流編號」，順便改成已出貨
   async tracking(me, b) {
-    need(me, 'orders');
+    need(me, 'ordersEdit');
     const rows = C.parseCSV(String(b.text || '')).filter((r) => /^W[0-9A-Z]{8}$/i.test(r[0]?.trim()));
     const errors = [];
     let ok = 0;
@@ -375,7 +380,7 @@ const POSTS = {
   },
 
   async orderMsg(me, b) {
-    need(me, 'orders');
+    if (!can(me, 'messages')) need(me, 'ordersEdit');
     return { order: await O.addMessage(id(b.no), 'admin', b.name || '客服', b.text) };
   },
 
@@ -387,6 +392,12 @@ const POSTS = {
 
   async productSave(me, b) {
     need(me, 'products');
+    // 看不到成本的人存檔時，保留原本的成本
+    if (!can(me, 'cost')) {
+      const old = b.id ? await D.one('products', id(b.id)) : null;
+      b.cost = old?.cost || 0;
+      b.variants = (b.variants || []).map((v) => ({ ...v, cost: old?.variants?.find((x) => x.key === (v.opts || []).join('/'))?.cost ?? old?.cost ?? 0 }));
+    }
     const r = await saveDoc('products', b, cleanProduct);
     if (!b.id) await D.db().doc('products/' + r.id).update({ sold: 0 });
     return { product: r };
@@ -428,7 +439,7 @@ const POSTS = {
   },
 
   async customerSave(me, b) {
-    need(me, 'customers');
+    need(me, 'customersEdit');
     const ref = D.db().doc('customers/' + id(b.id));
     const c = (await ref.get()).data();
     if (!c) throw new UserError('找不到顧客', 404);
@@ -446,7 +457,7 @@ const POSTS = {
   },
 
   async customersBulk(me, b) {
-    need(me, 'customers');
+    need(me, 'customersEdit');
     const ids = (b.ids || []).map(id).slice(0, 1000);
     for (const x of ids) {
       const ref = D.db().doc('customers/' + x);
@@ -458,12 +469,12 @@ const POSTS = {
   },
 
   async customersImport(me, b) {
-    need(me, 'customers');
+    need(me, 'customersExport');
     return C.importRows(C.parseCSV(String(b.text || '')), await D.groups());
   },
 
   async groupSave(me, b) {
-    need(me, 'customers');
+    need(me, 'customersEdit');
     return { group: await saveDoc('groups', b, (x) => {
       const name = str(x.name, 30);
       if (!name) throw new UserError('請填群組名稱');
@@ -471,14 +482,14 @@ const POSTS = {
     }) };
   },
   async groupDelete(me, b) {
-    need(me, 'customers');
+    need(me, 'customersEdit');
     const n = (await D.db().collection('customers').where('groupId', '==', id(b.id)).count().get()).data().count;
     if (n) throw new UserError(`還有 ${n} 位顧客在這個群組，請先移到別的群組或停用群組`);
     return deleteDoc('groups', b.id);
   },
 
   async codeSave(me, b) {
-    need(me, 'customers');
+    need(me, 'customersEdit');
     return { code: await saveDoc('codes', b, (x) => {
       const value = str(x.value, 60).toLowerCase();
       if (!value) throw new UserError('請填代碼');
@@ -486,7 +497,7 @@ const POSTS = {
       return { field: x.field === 'email' ? 'email' : 'code', op: x.op === 'endsWith' ? 'endsWith' : 'eq', value, groupId: id(x.groupId) };
     }) };
   },
-  async codeDelete(me, b) { need(me, 'customers'); return deleteDoc('codes', b.id); },
+  async codeDelete(me, b) { need(me, 'customersEdit'); return deleteDoc('codes', b.id); },
 
   async pageSave(me, b) {
     need(me, 'design');
@@ -594,6 +605,8 @@ const POSTS = {
 
   async adminSave(me, b) { need(me, 'accounts'); return { admins: await saveAdmin(b) }; },
   async adminRemove(me, b) { need(me, 'accounts'); return { admins: await removeAdmin(b) }; },
+  async roleSave(me, b) { need(me, 'accounts'); return { roles: await saveRole(b) }; },
+  async roleDelete(me, b) { need(me, 'accounts'); return { roles: await removeRole(b) }; },
 };
 
 export async function GET(request) {

@@ -1,5 +1,5 @@
 // 顧客管理：顧客名單、顧客詳情、顧客群組（會員等級）、特約代碼、顧客分眾
-import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, go, sw } from './app.js';
+import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, go, sw, can } from './app.js';
 
 
 /* ---------- 顧客名單 ---------- */
@@ -7,7 +7,7 @@ export async function list(el) {
   const st = { q: '', group: '', from: '', to: '', minSpent: '', maxSpent: '', black: '', page: 1, size: 20 };
   let rows = [], groups = [], selected = [];
   el.innerHTML = `
-    <div class="page-head"><h1>顧客名單</h1><div class="actions"><button class="btn" id="impBtn">${icon('upload')}上傳顧客資料</button><button class="btn" id="expBtn">${icon('download')}匯出全部顧客</button></div></div>
+    <div class="page-head"><h1>顧客名單</h1><div class="actions"><button class="btn" id="impBtn" ${can('customersExport') ? '' : 'hidden'}>${icon('upload')}上傳顧客資料</button><button class="btn" id="expBtn" ${can('customersExport') ? '' : 'hidden'}>${icon('download')}匯出全部顧客</button></div></div>
     <div class="card">
       <div class="filters">
         <div class="search-in"><input class="input" id="qF" placeholder="姓名、Email、手機"><button aria-label="搜尋">${icon('search')}</button></div>
@@ -40,8 +40,8 @@ export async function list(el) {
   };
   const drawBulk = () => {
     const b = $('#bulk', el);
-    if (!selected.length) { b.innerHTML = ''; return; }
-    b.innerHTML = `<div class="bulk">已選 ${selected.length} 位<select class="input" id="bg" style="width:auto"><option value="">移到群組…</option><option value="none">一般會員</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select><button class="btn sm" id="bgGo">套用</button><button class="btn sm" id="bpts">贈送購物金</button><button class="btn sm" id="bexp">${icon('download')}匯出選取</button></div>`;
+    if (!selected.length || !can('customersEdit')) { b.innerHTML = ''; return; }
+    b.innerHTML = `<div class="bulk">已選 ${selected.length} 位<select class="input" id="bg" style="width:auto"><option value="">移到群組…</option><option value="none">一般會員</option>${groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select><button class="btn sm" id="bgGo">套用</button><button class="btn sm" id="bpts">贈送購物金</button><button class="btn sm" id="bexp" ${can('customersExport') ? '' : 'hidden'}>${icon('download')}匯出選取</button></div>`;
     $('#bgGo', b).onclick = async (e) => { const g = $('#bg', b).value; if (!g) return; await busy(e.currentTarget, () => api.post('customersBulk', { ids: selected, op: 'group', groupId: g === 'none' ? null : g })); toast('已更新'); load(); };
     $('#bexp', b).onclick = () => api.download('exportCustomers', { ids: selected.join(',') });
     $('#bpts', b).onclick = () => givePoints(selected, load);
@@ -117,11 +117,11 @@ export async function detail(el, id) {
       <div>
         <div class="grid3"><div class="card"><small class="muted">累計消費</small><div style="font-size:1.5rem;font-weight:700">${money(s.spent || 0)}</div></div><div class="card"><small class="muted">訂單數</small><div style="font-size:1.5rem;font-weight:700">${s.orders || 0}</div></div><div class="card"><small class="muted">購物金</small><div style="font-size:1.5rem;font-weight:700">${c.points || 0} 點</div></div></div>
         <div class="card" style="margin-top:16px"><h2>訂單紀錄</h2>${orders.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>訂單編號</th><th>時間</th><th class="num">金額</th><th>狀態</th></tr></thead><tbody>${orders.map((o) => `<tr class="click" data-no="${o.no}"><td class="strong">${o.no}</td><td>${fmt.time(o.createdAt)}</td><td class="num">${money(o.total)}</td><td>${pill({ processing: '處理中', preparing: '備貨中', shipped: '已出貨', returning: '退換貨', closed: '訂單結案', cancelled: '已取消' }[o.status])}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">還沒有訂單</p>'}</div>
-        <div class="card"><div class="card-h">購物金紀錄<div class="actions"><button class="btn sm" id="ptsBtn">調整購物金</button></div></div>${(c.pointsLog || []).length ? `<table class="tbl">${c.pointsLog.map((l) => `<tr><td class="nowrap">${fmt.time(l.at)}</td><td>${esc(l.note)}</td><td class="num ${l.change > 0 ? '' : 'err'}">${l.change > 0 ? '+' : ''}${l.change}</td></tr>`).join('')}</table>` : '<p class="muted">沒有紀錄</p>'}</div>
+        <div class="card"><div class="card-h">購物金紀錄<div class="actions">${can('customersEdit') ? '<button class="btn sm" id="ptsBtn">調整購物金</button>' : ''}</div></div>${(c.pointsLog || []).length ? `<table class="tbl">${c.pointsLog.map((l) => `<tr><td class="nowrap">${fmt.time(l.at)}</td><td>${esc(l.note)}</td><td class="num ${l.change > 0 ? '' : 'err'}">${l.change > 0 ? '+' : ''}${l.change}</td></tr>`).join('')}</table>` : '<p class="muted">沒有紀錄</p>'}</div>
       </div>
       <div>
         <div class="card"><h2>基本資料</h2><dl class="dl"><dt>Email</dt><dd>${esc(c.email)}</dd><dt>手機</dt><dd>${esc(c.phone || '-')}</dd><dt>生日</dt><dd>${esc(c.birthday || '-')}</dd><dt>性別</dt><dd>${esc(c.gender || '-')}</dd><dt>註冊</dt><dd>${fmt.time(c.createdAt)}</dd>${c.source ? `<dt>來源</dt><dd>${esc(c.source)}</dd>` : ''}<dt>最近消費</dt><dd>${fmt.date(s.lastOrderAt)}</dd>${c.address?.address ? `<dt>常用地址</dt><dd>${esc(c.address.zip || '')} ${esc(c.address.address)}</dd>` : ''}</dl></div>
-        <form class="card" id="cf"><h2>管理</h2>
+        <form class="card" id="cf" ${can('customersEdit') ? '' : 'hidden'}><h2>管理</h2>
           <label class="field"><span>顧客群組</span><select class="input" name="groupId"><option value="">一般會員</option>${groups.map((g) => `<option value="${g.id}"${c.groupId === g.id ? ' selected' : ''}>${esc(g.name)}</option>`).join('')}</select><span class="help">手動指定後，不會再被自動升降級</span></label>
           <label class="field"><span>群組使用期限（空白＝永久）</span><input class="input" type="date" name="groupUntil" value="${c.groupUntil ? fmt.ymd(c.groupUntil) : ''}"></label>
           <div class="switch-row"><div class="sr-body"><b>黑名單</b><small>黑名單的顧客不能下單</small></div>${sw('blacklisted', c.blacklisted)}</div>
@@ -130,7 +130,7 @@ export async function detail(el, id) {
       </div>
     </div>`;
   $$('tr[data-no]', el).forEach((tr) => (tr.onclick = () => go('/admin/orders/' + tr.dataset.no)));
-  $('#ptsBtn', el).onclick = () => givePoints([id], () => detail(el, id));
+  $('#ptsBtn', el)?.addEventListener('click', () => givePoints([id], () => detail(el, id)));
   $('#cf', el).onsubmit = async (e) => {
     e.preventDefault();
     const d = new FormData(e.target);

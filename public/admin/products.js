@@ -1,5 +1,5 @@
 // 商品：列表（上下架分頁、搜尋、標籤、庫存區間、批次）與編輯（圖片、規格組合、價格、庫存、介紹）
-import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, promptBox, go, guard, tagInput, pickMedia, richText, sortable } from './app.js';
+import { api, $, $$, esc, money, icon, toast, modal, busy, fmt, pill, pager, checkable, emptyBox, confirmBox, promptBox, go, guard, tagInput, pickMedia, richText, sortable, can } from './app.js';
 
 export async function list(el) {
   const q = new URLSearchParams(location.search);
@@ -39,10 +39,10 @@ export async function list(el) {
     drawBulk();
     if (!list.length) { box.innerHTML = rows.length ? emptyBox('沒有符合的商品') : `<div class="empty">${icon('box')}<div>還沒有商品</div><a class="btn primary" href="/admin/products/new" style="margin-top:12px">新增第一個商品</a></div>`; return; }
     const page = list.slice((st.page - 1) * st.size, st.page * st.size);
-    box.innerHTML = `<div class="table-wrap"><table class="tbl"><thead><tr><th class="chk"><input type="checkbox" aria-label="全選"></th><th></th><th>商品編號</th><th>商品名稱</th><th class="num">規格</th><th class="num">售價</th><th class="num">成本</th><th class="num">庫存</th><th class="num">已售</th><th>狀態</th><th>更新時間</th></tr></thead><tbody>
+    box.innerHTML = `<div class="table-wrap"><table class="tbl"><thead><tr><th class="chk"><input type="checkbox" aria-label="全選"></th><th></th><th>商品編號</th><th>商品名稱</th><th class="num">規格</th><th class="num">售價</th>${can('cost') ? '<th class="num">成本</th>' : ''}<th class="num">庫存</th><th class="num">已售</th><th>狀態</th><th>更新時間</th></tr></thead><tbody>
       ${page.map((p) => `<tr class="click" data-id="${p.id}"><td class="chk"><input type="checkbox" value="${p.id}" aria-label="選取"></td><td>${p.img ? `<img class="thumb" src="${esc(p.img)}" alt="">` : '<span class="thumb"></span>'}</td>
         <td class="muted">${esc(p.sku || '')}</td><td class="ellipsis" title="${esc(p.name)}">${esc(p.name)}${p.tags.length ? `<div class="small muted">${p.tags.map(esc).join('、')}</div>` : ''}</td>
-        <td class="num">${p.specs || '-'}</td><td class="num">${money(p.price)}</td><td class="num">${money(p.cost)}</td><td class="num ${p.stock <= 0 ? 'err' : ''}">${p.stock}</td><td class="num">${p.sold}</td>
+        <td class="num">${p.specs || '-'}</td><td class="num">${money(p.price)}</td>${can('cost') ? `<td class="num">${money(p.cost)}</td>` : ''}<td class="num ${p.stock <= 0 ? 'err' : ''}">${p.stock}</td><td class="num">${p.sold}</td>
         <td>${p.on ? pill('上架', 'ok') : pill('下架')}</td><td class="nowrap">${fmt.time(p.updatedAt)}</td></tr>`).join('')}</tbody></table></div>`;
     box.append(pager(list.length, st.page, st.size, (pg, s) => { st.page = pg; st.size = s; draw(); }));
     $$('tbody tr', box).forEach((tr) => (tr.onclick = () => go('/admin/products/' + tr.dataset.id)));
@@ -173,21 +173,21 @@ export async function edit(el, id) {
     const multi = p.specs.length && p.variants.length && p.variants[0].opts?.length;
     if (!multi) {
       const v = p.variants[0];
-      box.innerHTML = `<div class="row"><label class="field"><span>售價 <em>*</em></span><input class="input" type="number" min="0" data-f="price" value="${v.price}"></label><label class="field"><span>成本</span><input class="input" type="number" min="0" data-f="cost" value="${v.cost || 0}"></label><label class="field"><span>庫存</span><input class="input" type="number" min="0" data-f="stock" value="${v.stock}"></label></div>`;
+      box.innerHTML = `<div class="row"><label class="field"><span>售價 <em>*</em></span><input class="input" type="number" min="0" data-f="price" value="${v.price}"></label>${can('cost') ? `<label class="field"><span>成本</span><input class="input" type="number" min="0" data-f="cost" value="${v.cost || 0}"></label>` : ''}<label class="field"><span>庫存</span><input class="input" type="number" min="0" data-f="stock" value="${v.stock}"></label></div>`;
       $$('[data-f]', box).forEach((inp) => (inp.oninput = () => { v[inp.dataset.f] = +inp.value || 0; mark(); }));
       return;
     }
-    box.innerHTML = `<div class="inline" style="margin-bottom:8px"><span class="muted small">全部套用：</span><input class="input" type="number" placeholder="售價" id="allP" style="width:100px"><input class="input" type="number" placeholder="成本" id="allC" style="width:100px"><input class="input" type="number" placeholder="庫存" id="allS" style="width:100px"><button type="button" class="btn sm" id="allGo">套用</button></div>
-      <div class="table-wrap"><table class="tbl vt"><thead><tr>${p.specs.map((s) => `<th>${esc(s.name || '規格')}</th>`).join('')}<th>圖片</th><th>規格編號</th><th>售價</th><th>成本</th><th>庫存</th></tr></thead><tbody>
+    box.innerHTML = `<div class="inline" style="margin-bottom:8px"><span class="muted small">全部套用：</span><input class="input" type="number" placeholder="售價" id="allP" style="width:100px">${can('cost') ? '<input class="input" type="number" placeholder="成本" id="allC" style="width:100px">' : ''}<input class="input" type="number" placeholder="庫存" id="allS" style="width:100px"><button type="button" class="btn sm" id="allGo">套用</button></div>
+      <div class="table-wrap"><table class="tbl vt"><thead><tr>${p.specs.map((s) => `<th>${esc(s.name || '規格')}</th>`).join('')}<th>圖片</th><th>規格編號</th><th>售價</th>${can('cost') ? '<th>成本</th>' : ''}<th>庫存</th></tr></thead><tbody>
       ${p.variants.map((v, i) => `<tr data-i="${i}">${v.opts.map((o) => `<td>${esc(o)}</td>`).join('')}<td><select class="input" data-f="img" style="min-width:90px"><option value="">封面</option>${p.images.map((u, j) => `<option value="${esc(u)}"${v.img === u ? ' selected' : ''}>第 ${j + 1} 張</option>`).join('')}</select></td>
-        <td><input class="input" data-f="sku" value="${esc(v.sku || '')}"></td><td><input class="input" type="number" min="0" data-f="price" value="${v.price}"></td><td><input class="input" type="number" min="0" data-f="cost" value="${v.cost || 0}"></td><td><input class="input" type="number" min="0" data-f="stock" value="${v.stock}"></td></tr>`).join('')}
+        <td><input class="input" data-f="sku" value="${esc(v.sku || '')}"></td><td><input class="input" type="number" min="0" data-f="price" value="${v.price}"></td>${can('cost') ? `<td><input class="input" type="number" min="0" data-f="cost" value="${v.cost || 0}"></td>` : ''}<td><input class="input" type="number" min="0" data-f="stock" value="${v.stock}"></td></tr>`).join('')}
       </tbody></table></div><p class="muted small">共 ${p.variants.length} 種組合，總庫存 ${p.variants.reduce((a, v) => a + (+v.stock || 0), 0)}</p>`;
     $$('tbody tr', box).forEach((tr) => {
       const v = p.variants[+tr.dataset.i];
       $$('[data-f]', tr).forEach((inp) => (inp.oninput = inp.onchange = () => { v[inp.dataset.f] = ['sku', 'img'].includes(inp.dataset.f) ? inp.value : +inp.value || 0; mark(); }));
     });
     $('#allGo', box).onclick = () => {
-      const P = $('#allP', box).value, C = $('#allC', box).value, S = $('#allS', box).value;
+      const P = $('#allP', box).value, C = $('#allC', box)?.value ?? '', S = $('#allS', box).value;
       p.variants.forEach((v) => { if (P !== '') v.price = +P; if (C !== '') v.cost = +C; if (S !== '') v.stock = +S; });
       mark();
       drawVariants();

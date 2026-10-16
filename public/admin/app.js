@@ -7,6 +7,8 @@ export const $ = (s, el = document) => el.querySelector(s);
 export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const view = $('#view');
 export const ctx = { me: null, store: null };
+// 目前登入的員工有沒有這個權限（只用來藏按鈕，真正的檢查在後端）
+export const can = (k) => !!ctx.me?.perms.includes(k);
 
 export const api = {
   get: (a, params = {}) => rawApi('/api/admin?' + new URLSearchParams({ a, ...params })),
@@ -440,7 +442,13 @@ async function route() {
   let hit = null;
   for (const [re, mod, fn] of ROUTES) { const m = path.match(re); if (m) { hit = { mod, fn, args: m.slice(1) }; break; } }
   if (!hit) { view.innerHTML = emptyBox('找不到這個頁面'); return; }
-  if (!ctx.me.perms.includes(PERM[hit.mod])) { view.innerHTML = emptyBox('您的帳號沒有這個功能的權限'); return; }
+  if (!ctx.me.perms.includes(PERM[hit.mod])) {
+    // 沒有總覽權限的員工，登入後直接到第一個能用的功能
+    const first = hit.mod === 'dashboard' && NAV.find((n) => ctx.me.perms.includes(PERM[n.key]));
+    if (first) return go(first.href || first.items[0][1], true);
+    view.innerHTML = emptyBox('您的帳號沒有這個功能的權限');
+    return;
+  }
   view.innerHTML = '<div class="loading">載入中…</div>';
   window.scrollTo(0, 0);
   try {
