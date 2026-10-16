@@ -79,7 +79,15 @@ export async function GET(request) {
     if (a === 'page') {
       const pages = await D.all('pages', 3000);
       const slug = q.get('slug');
-      const p = slug ? pages.find((x) => x.slug === slug) : pages.find((x) => x.home);
+      let p = slug ? pages.find((x) => x.slug === slug) : pages.find((x) => x.home);
+      // 還沒在後台設計首頁：先顯示歡迎文字和全部商品
+      if (!p && !slug) {
+        const store = await S.get('store');
+        p = { title: store.name, slug: 'home', home: true, blocks: [
+          { id: 'w', type: 'text', html: `<h2>歡迎來到 ${store.name.replace(/[<>&]/g, '')}</h2><p>${store.desc.replace(/[<>&]/g, '') || '商店正在準備中，歡迎先逛逛商品。'}</p>`, align: 'center', pt: 48 },
+          { id: 'p', type: 'products', title: '全部商品', source: 'all', sort: 'new', limit: 24, cols: 4 },
+        ] };
+      }
       if (!p) throw new UserError('找不到這個頁面', 404);
       return json({ page: { title: p.title, slug: p.slug, home: !!p.home, settings: p.settings || {}, blocks: fillBlocks(p.blocks, ctx.products, cust, ctx, hide) } });
     }
