@@ -256,3 +256,9 @@ h1.page-title{font-size:1.5rem;margin:8px 0 20px;letter-spacing:.03em}
 .r-round{--r-btn:999px;--r-img:12px}
 .r-soft{--r-btn:6px;--r-img:4px}
 .r-square{--r-btn:0;--r-img:0}
+
+/* 右下角浮動按鈕 */
+.floaters{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;z-index:40}
+.fl-btn{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--c-line);background:var(--c-bg);color:var(--c-text);box-shadow:0 4px 14px rgba(0,0,0,.12);text-decoration:none;font-size:.75rem;font-weight:700}
+.fl-btn.line{background:#06C755;border-color:#06C755;color:#fff}
+@media (max-width:800px){.floaters{bottom:calc(80px + env(safe-area-inset-bottom,0px))}}

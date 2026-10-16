@@ -43,16 +43,28 @@ const orderRow = (o) => ({
   trackingNo: o.trackingNo, tags: o.tags || [], unread: !!o.adminUnread, flagged: !!o.flagged, returnReq: o.returnReq?.status === 'pending',
 });
 
-function orderCsv(list) {
-  const rows = [['訂單編號', '下單時間', '訂單狀態', '帳款狀態', '運送狀態', '付款方式', '運送方式', '物流編號', '訂購人', 'Email', '手機', '收件人', '收件電話', '地址／門市', '商品', '規格', '數量', '單價', '小計', '折扣', '購物金折抵', '運費', '訂單金額', '顧客留言', '後台備註']];
+// 訂單 CSV 欄位（匯出設定可以勾選要哪些）
+const INV = { personal: '個人', company: '公司', carrier: '手機載具', donate: '捐贈' };
+export const ORDER_COLS = [
+  ['no', '訂單編號', (o) => o.no], ['createdAt', '下單時間', (o) => new Date(o.createdAt + 8 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')],
+  ['status', '訂單狀態', (o) => O.STATUS[o.status]], ['pay', '帳款狀態', (o) => O.PAY[o.payment.status]], ['ship', '運送狀態', (o) => O.SHIP[o.shipStatus]],
+  ['payName', '付款方式', (o) => o.payment.name], ['shipName', '運送方式', (o) => o.shipping.name], ['trackingNo', '物流編號', (o) => o.trackingNo],
+  ['buyer', '訂購人', (o) => o.buyer.name], ['email', 'Email', (o) => o.buyer.email], ['phone', '手機', (o) => o.buyer.phone],
+  ['recv', '收件人', (o) => o.receiver.name], ['recvPhone', '收件電話', (o) => o.receiver.phone], ['addr', '地址／門市', (o) => o.receiver.store || `${o.receiver.zip || ''} ${o.receiver.address}`.trim()],
+  ['want', '期望到貨', (o) => [o.want?.date, o.want?.time].filter(Boolean).join(' ')],
+  ['invoice', '發票', (o) => (o.invoice ? [INV[o.invoice.type], o.invoice.taxId, o.invoice.title, o.invoice.carrier, o.invoice.donateCode].filter(Boolean).join(' ') : '')],
+  ['item', '商品', (o, l) => l.name, true], ['spec', '規格', (o, l) => l.spec, true], ['sku', '商品編號', (o, l) => l.sku, true], ['qty', '數量', (o, l) => l.qty, true], ['price', '單價', (o, l) => l.price, true], ['amount', '小計', (o, l) => l.amount, true],
+  ['discount', '折扣', (o) => o.discountTotal], ['points', '購物金折抵', (o) => o.pointsValue], ['fee', '運費', (o) => o.shipping.fee], ['total', '訂單金額', (o) => o.total],
+  ['note', '顧客留言', (o) => o.note], ['adminNote', '後台備註', (o) => o.adminNote], ['tags', '標籤', (o) => (o.tags || []).join('、')],
+];
+
+function orderCsv(list, keys) {
+  const cols = keys?.length ? ORDER_COLS.filter((c) => keys.includes(c[0])) : ORDER_COLS;
+  const perLine = cols.some((c) => c[3]);
+  const rows = [cols.map((c) => c[1])];
   for (const o of list) {
-    const lines = [...o.items, ...(o.addonItems || []).map((l) => ({ ...l, name: '【加購】' + l.name }))];
-    lines.forEach((l, i) => rows.push([
-      o.no, new Date(o.createdAt + 8 * 3600e3).toISOString().slice(0, 16).replace('T', ' '), O.STATUS[o.status], O.PAY[o.payment.status], O.SHIP[o.shipStatus], o.payment.name, o.shipping.name, o.trackingNo,
-      o.buyer.name, o.buyer.email, o.buyer.phone, o.receiver.name, o.receiver.phone, o.receiver.store || o.receiver.address,
-      l.name, l.spec, l.qty, l.price, l.amount,
-      i ? '' : o.discountTotal, i ? '' : o.pointsValue, i ? '' : o.shipping.fee, i ? '' : o.total, i ? '' : o.note, i ? '' : o.adminNote,
-    ]));
+    const lines = perLine ? [...o.items, ...(o.addonItems || []).map((l) => ({ ...l, name: '【加購】' + l.name }))] : [null];
+    lines.forEach((l, i) => rows.push(cols.map((c) => (c[3] ? c[2](o, l) : i ? '' : c[2](o)))));
   }
   return rows;
 }
@@ -80,6 +92,8 @@ function cleanProduct(b) {
     price: Math.min(...variants.map((v) => v.price)), listPrice: int(b.listPrice), cost: int(b.cost),
     specs, variants, stock: variants.reduce((a, v) => a + v.stock, 0),
     seoTitle: str(b.seoTitle, 100), seoDesc: str(b.seoDesc, 300),
+    shipIds: strs(b.shipIds, 20, 30), // 適用物流：空＝全部
+    viewGroups: strs(b.viewGroups, 30, 30), // 瀏覽權限：空＝所有人
   };
 }
 
@@ -88,14 +102,18 @@ const days = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '');
 const strs = (a, n = 50, len = 40) => (Array.isArray(a) ? a.map((x) => str(x, len)).filter(Boolean).slice(0, n) : []);
 
 function cleanDiscount(b) {
-  const type = ['product', 'order', 'coupon', 'freeShip', 'points'].includes(b.type) ? b.type : null;
+  const type = ['product', 'order', 'coupon', 'freeShip', 'points', 'tagOrder', 'bundle', 'gift'].includes(b.type) ? b.type : null;
   if (!type) throw new UserError('折扣類型不正確');
   const d = {
     type, name: str(b.name, 40), on: !!b.on, start: days(b.start), end: days(b.end), priority: int(b.priority, 0, 999), groups: strs(b.groups),
     tags: strs(b.tags), percent: num(b.percent, 0, 100), amount: int(b.amount), mode: b.mode === 'percent' ? 'percent' : 'amount', threshold: int(b.threshold),
     code: str(b.code, 30).toUpperCase().replace(/\s/g, ''), limit: int(b.limit), once: !!b.once, shippingIds: strs(b.shippingIds),
     trigger: ['spend', 'birthday', 'signup'].includes(b.trigger) ? b.trigger : 'spend', expireDays: int(b.expireDays),
+    unit: b.unit === 'qty' ? 'qty' : 'amount', count: int(b.count, 0, 99), price: int(b.price),
+    giftPid: id(b.giftPid), giftVkey: str(b.giftVkey, 100), giftQty: int(b.giftQty, 1, 99) || 1,
   };
+  if (type === 'bundle' && (d.count < 2 || !d.price)) throw new UserError('選選樂要設定「任選幾件」（至少 2 件）和組合價');
+  if (type === 'gift' && !d.giftPid) throw new UserError('請選擇贈品');
   if (!d.name) throw new UserError('請填活動名稱');
   if (type === 'coupon' && !d.code) throw new UserError('請填優惠碼');
   if (type === 'product' && !(d.percent > 0)) throw new UserError('請填折扣 %');
@@ -171,11 +189,11 @@ const GETS = {
       profit: can(me, 'cost') ? month.filter(counted).reduce((a, o) => a + o.total - (o.cost || 0) - (o.shipping?.fee || 0), 0) : null,
       todo: {
         pending: orders.filter((o) => o.status === 'processing').length,
-        unshipped: orders.filter((o) => !['cancelled', 'closed'].includes(o.status) && o.shipStatus === 'unshipped' && (o.payment.status === 'paid' || o.payment.id === 'cod')).length,
+        unshipped: orders.filter((o) => !['cancelled', 'closed'].includes(o.status) && o.shipStatus === 'unshipped' && (o.payment.status === 'paid' || O.payKind(o.payment) === 'cod')).length,
         orderQA: orders.filter((o) => o.adminUnread).length,
         productQA: questions.filter((q) => !q.replied).length,
         returns: orders.filter((o) => o.returnReq?.status === 'pending').length,
-        unpaidTransfer: orders.filter((o) => o.status !== 'cancelled' && o.payment.id === 'atm' && o.payment.status === 'unpaid' && o.payment.transfer).length,
+        unpaidTransfer: orders.filter((o) => o.status !== 'cancelled' && O.payKind(o.payment) === 'transfer' && o.payment.status === 'unpaid' && o.payment.transfer).length,
       },
       monthOrders: month.filter((o) => o.status !== 'cancelled').length,
       todayOrders: orders.filter((o) => D.twDate(o.createdAt) === today && o.status !== 'cancelled').length,
@@ -211,7 +229,7 @@ const GETS = {
     const all = (await D.all('orders')).sort((a, b) => b.createdAt - a.createdAt);
     const nos = q.get('nos') ? q.get('nos').split(',') : null;
     const list = nos ? all.filter((o) => nos.includes(o.no)) : filterOrders(all, q);
-    return csvResponse(orderCsv(list), `訂單_${D.twDate()}.csv`);
+    return csvResponse(orderCsv(list, (await S.get('exports')).orderCols), `訂單_${D.twDate()}.csv`);
   },
 
   async products(me) {
@@ -293,6 +311,12 @@ const GETS = {
 
   async pages(me) {
     need(me, 'design');
+    // 商品版型：商品列表頁上方、商品頁下方的區塊，第一次打開時建立
+    for (const [tid, title] of [['tpl-list', '商品列表頁（搜尋結果）'], ['tpl-product', '商品內容頁']]) {
+      const ref = D.db().doc('pages/' + tid);
+      if (!(await ref.get()).exists) await ref.set({ title, slug: tid, home: false, hidden: true, template: true, settings: {}, blocks: [], createdAt: Date.now(), updatedAt: Date.now() });
+    }
+    D.bust('pages');
     const [pages, menus] = await Promise.all([D.all('pages'), D.all('menus')]);
     return { pages: pages.map(({ blocks, ...p }) => ({ ...p, blocks: blocks?.length || 0 })).sort((a, b) => (b.home ? 1 : 0) - (a.home ? 1 : 0) || a.title.localeCompare(b.title)), menus };
   },
@@ -326,6 +350,18 @@ const GETS = {
     return { rows: list.sort((a, b) => b.createdAt - a.createdAt), folders: folders?.list || [] };
   },
 
+  async restock(me) {
+    need(me, 'products');
+    const list = (await D.all('restock')).sort((a, b) => b.createdAt - a.createdAt);
+    const products = await D.products();
+    return { rows: list.map((r) => { const p = products.find((x) => x.id === r.pid); const v = p?.variants?.find((x) => x.key === r.vkey); return { ...r, stock: v?.stock ?? null, img: p?.images?.[0] || '' }; }) };
+  },
+
+  async exportCols(me) {
+    need(me, 'settings');
+    return { orderCols: ORDER_COLS.map(([k, n, , line]) => ({ key: k, name: n, line: !!line })) };
+  },
+
   async settings(me) {
     need(me, 'settings');
     return { settings: await S.getAll(), defaults: S.DEFAULTS };
@@ -338,8 +374,13 @@ const GETS = {
 
   // 商品選擇器（頁面設計、行銷都會用）
   async pick(me) {
-    const products = await D.products();
-    return { products: products.map((p) => ({ id: p.id, name: p.name, img: p.images?.[0] || '', price: p.price, on: p.on, tags: p.tags || [], specs: p.specs || [], variants: (p.variants || []).map((v) => ({ key: v.key, stock: v.stock })) })), tags: [...new Set(products.flatMap((p) => p.tags || []))] };
+    const [products, shipping, groups] = await Promise.all([D.products(), S.get('shipping'), D.groups()]);
+    return {
+      products: products.map((p) => ({ id: p.id, name: p.name, img: p.images?.[0] || '', price: p.price, on: p.on, tags: p.tags || [], specs: p.specs || [], variants: (p.variants || []).map((v) => ({ key: v.key, stock: v.stock })) })),
+      tags: [...new Set(products.flatMap((p) => p.tags || []))],
+      shipping: shipping.methods.map(({ id, name, on }) => ({ id, name, on })),
+      groups: groups.map(({ id, name }) => ({ id, name })),
+    };
   },
 };
 
@@ -420,12 +461,49 @@ const POSTS = {
     return { ok: ids.length };
   },
 
+  // 商品大量更新：rows=[{ id, key, sku, price, listPrice, cost, stock }]
+  async variantsBulk(me, b) {
+    need(me, 'products');
+    const byP = new Map();
+    for (const r of (b.rows || []).slice(0, 2000)) { const k = id(r.id); if (!byP.has(k)) byP.set(k, []); byP.get(k).push(r); }
+    const t = Date.now();
+    let n = 0;
+    for (const [pid, rows] of byP) {
+      await D.db().runTransaction(async (tx) => {
+        const ref = D.db().doc('products/' + pid);
+        const d = await tx.get(ref);
+        if (!d.exists) return;
+        const p = d.data();
+        for (const r of rows) {
+          const v = p.variants.find((x) => x.key === String(r.key ?? ''));
+          if (!v) continue;
+          if (r.sku !== undefined) v.sku = str(r.sku, 40);
+          if (r.price !== undefined) v.price = int(r.price);
+          if (r.listPrice !== undefined) v.listPrice = int(r.listPrice);
+          if (r.cost !== undefined && can(me, 'cost')) v.cost = int(r.cost);
+          if (r.stock !== undefined) v.stock = int(r.stock, 0, 999999);
+          n++;
+        }
+        tx.update(ref, { variants: p.variants, stock: p.variants.reduce((a, v) => a + (v.stock || 0), 0), price: Math.min(...p.variants.map((v) => v.price)), updatedAt: t });
+      });
+    }
+    D.bust('products');
+    return { ok: n };
+  },
+
   async productCopy(me, b) {
     need(me, 'products');
     const p = await D.one('products', id(b.id));
     if (!p) throw new UserError('找不到商品', 404);
     const { id: _i, ...rest } = p;
     return { product: await saveDoc('products', { ...rest, name: p.name + '（複製）', on: false }, cleanProduct) };
+  },
+
+  async restockDone(me, b) {
+    need(me, 'products');
+    const ids = (b.ids || []).map((x) => String(x).slice(0, 200));
+    for (const x of ids) b.remove ? await D.db().doc('restock/' + x).delete() : await D.db().doc('restock/' + x).update({ notified: true });
+    return { ok: ids.length };
   },
 
   async questionReply(me, b) {
@@ -505,7 +583,8 @@ const POSTS = {
     if (!b.home && !slug) throw new UserError('請填網址名稱（英數字）');
     const pages = await D.all('pages');
     if (slug && pages.some((p) => p.slug === slug && p.id !== b.id)) throw new UserError('網址名稱重複了');
-    const r = await saveDoc('pages', b, (x) => ({ title: str(x.title, 60) || '未命名頁面', slug: x.home ? slug || 'home' : slug, home: !!x.home, hidden: !!x.hidden, settings: { width: int(x.settings?.width, 0, 2000), bg: str(x.settings?.bg, 20), seoTitle: str(x.settings?.seoTitle, 100), seoDesc: str(x.settings?.seoDesc, 300) }, blocks: cleanBlocks(x.blocks) }));
+    const tpl = ['tpl-list', 'tpl-product'].includes(b.id);
+    const r = await saveDoc('pages', b, (x) => ({ title: str(x.title, 60) || '未命名頁面', slug: tpl ? b.id : x.home ? slug || 'home' : slug, home: tpl ? false : !!x.home, hidden: tpl || !!x.hidden, template: tpl, settings: { width: int(x.settings?.width, 0, 2000), bg: str(x.settings?.bg, 20), seoTitle: str(x.settings?.seoTitle, 100), seoDesc: str(x.settings?.seoDesc, 300) }, blocks: cleanBlocks(x.blocks) }));
     if (b.home) for (const p of pages.filter((p) => p.home && p.id !== r.id)) await D.db().doc('pages/' + p.id).update({ home: false });
     D.bust('pages');
     return { page: r };
@@ -514,6 +593,7 @@ const POSTS = {
     need(me, 'design');
     const p = await D.one('pages', id(b.id));
     if (p?.home) throw new UserError('首頁不能刪除');
+    if (p?.template) throw new UserError('商品版型不能刪除，可以把區塊清空');
     return deleteDoc('pages', b.id);
   },
 

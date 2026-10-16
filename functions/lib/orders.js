@@ -12,16 +12,23 @@ import * as S from './settings.js';
 import { quote, context, variantOf } from './pricing.js';
 import { UserError, str } from './http.js';
 
+// 舊訂單沒有 kind，用 id 推
+export const payKind = (p) => p.kind || ({ card: 'online', atm: 'transfer', cod: 'cod' }[p.id] || 'offline');
+
 export const STATUS = { processing: '處理中', preparing: '備貨中', shipped: '已出貨', returning: '退換貨', closed: '訂單結案', cancelled: '已取消' };
 export const PAY = { unpaid: '等待付款', paid: '對帳完成', failed: '付款失敗', refunded: '已退款' };
 export const SHIP = { unshipped: '未出貨', shipped: '已出貨', arrived: '已到貨', returned: '已退貨' };
 
 const orderRef = (no) => D.db().doc('orders/' + no);
 
-function receiverOf(body, shipType, buyer) {
+// 台灣地址：開頭是縣市名稱
+const TW = /^(\d{3,6}\s*)?(台|臺)?(北市|北縣|中市|南市|東縣|北|中|南|東)|^(新北|桃園|新竹|苗栗|彰化|南投|雲林|嘉義|屏東|宜蘭|花蓮|基隆|澎湖|金門|連江)/;
+
+function receiverOf(body, shipType, buyer, domesticOnly) {
   const r = body.receiver || {};
   const out = { name: str(r.name, 30) || buyer.name, phone: str(r.phone, 20) || buyer.phone, address: str(r.address, 200), store: str(r.store, 60), zip: str(r.zip, 10) };
   if (shipType === 'home' && !out.address) throw new UserError('請填寫收件地址');
+  if (shipType === 'home' && domesticOnly && !TW.test(out.address.replace(/^\s+/, ''))) throw new UserError('目前只寄送台灣地址，請從縣市開始填寫');
   if (shipType === 'cvs' && !out.store) throw new UserError('請填寫取貨門市');
   if (!out.name || !out.phone) throw new UserError('請填寫收件人姓名和電話');
   return out;
@@ -33,13 +40,16 @@ export async function create(body, me) {
   if (!me && !shopping.guestCheckout) throw new UserError('請先登入會員再結帳', 401);
   const cust = me ? await D.one('customers', me.uid) : null;
   if (me && !cust) throw new UserError('請先完成會員資料', 400);
-  if (cust?.blacklisted) throw new UserError('您的帳號暫時無法下單，請聯絡客服', 403);
+  if (cust?.blacklisted && customerSet.blacklistBlock !== false) throw new UserError('您的帳號暫時無法下單，請聯絡客服', 403);
+  if (shopping.terms?.on && !body.agree) throw new UserError('請先勾選同意條款');
+  const note = str(body.note, 500);
+  if (shopping.noteRequired && !note) throw new UserError('請填寫訂單備註');
 
   const buyer = me
     ? { name: cust.name, email: cust.email, phone: cust.phone }
     : { name: str(body.buyer?.name, 30), email: str(body.buyer?.email, 80).toLowerCase(), phone: str(body.buyer?.phone, 20) };
   if (!buyer.name || !/^\S+@\S+\.\S+$/.test(buyer.email || '')) throw new UserError('請填寫訂購人姓名和 Email');
-  if (customerSet.requirePhone && !buyer.phone) throw new UserError('請填寫訂購人手機');
+  if ((customerSet.fields?.phone || (customerSet.requirePhone ? 'required' : 'optional')) === 'required' && !buyer.phone) throw new UserError('請填寫訂購人手機');
 
   const ctx = await context();
   const q = await quote({ ...body.cart, strictCoupon: true }, cust, ctx);
@@ -48,9 +58,30 @@ export async function create(body, me) {
   if (!q.shipping) throw new UserError('請選擇運送方式');
   const pay = q.payments.find((p) => p.id === body.cart?.paymentId);
   if (!pay) throw new UserError('請選擇付款方式');
-  const receiver = receiverOf(body, q.shipping.type, buyer);
+  const receiver = receiverOf(body, q.shipping.type, buyer, shopping.domesticOnly);
+  // 期望到貨日、時段
+  const sm = q.shippingMethods.find((m) => m.id === q.shipping.id);
+  const want = { date: /^\d{4}-\d{2}-\d{2}$/.test(body.want?.date || '') ? body.want.date : '', time: sm.slots.includes(body.want?.time) ? body.want.time : '' };
+  if (sm.wantDate === 'required' && !want.date) throw new UserError('請選擇期望到貨日');
+  if (sm.wantTime === 'required' && !want.time) throw new UserError('請選擇期望到貨時段');
+  if (want.date) {
+    const d0 = new Date(Date.now() + 8 * 3600e3 + sm.prepDays * 86400e3).toISOString().slice(0, 10);
+    const d1 = new Date(Date.now() + 8 * 3600e3 + (sm.prepDays + sm.dateRange) * 86400e3).toISOString().slice(0, 10);
+    if (want.date < d0 || want.date > d1 || sm.noWeekdays.includes(String(new Date(want.date + 'T00:00:00Z').getUTCDay()))) throw new UserError('這一天不能指定到貨，請重新選擇');
+  }
+  // 發票
+  let invoice = null;
+  if (shopping.invoice?.on) {
+    const iv = body.invoice || {};
+    const type = ['personal', 'company', 'carrier', 'donate'].includes(iv.type) ? iv.type : 'personal';
+    invoice = { type, taxId: str(iv.taxId, 8), title: str(iv.title, 60), carrier: str(iv.carrier, 20), donateCode: str(iv.donateCode, 10) };
+    if (type === 'company' && (!/^\d{8}$/.test(invoice.taxId) || !invoice.title)) throw new UserError('請填寫正確的統一編號和公司抬頭');
+    if (type === 'carrier' && !/^\/[0-9A-Z.+-]{7}$/.test(invoice.carrier.toUpperCase())) throw new UserError('手機條碼載具格式是「/」加 7 碼');
+    if (type === 'donate' && !/^\d{3,7}$/.test(invoice.donateCode)) throw new UserError('請填寫捐贈碼');
+    if (type === 'carrier') invoice.carrier = invoice.carrier.toUpperCase();
+  }
 
-  const all = [...q.lines, ...q.addonLines];
+  const all = [...q.lines, ...q.addonLines, ...q.giftLines];
   const t = Date.now();
   const key = D.code(16); // 訪客查訂單用
   const no = await D.db().runTransaction(async (tx) => {
@@ -97,15 +128,16 @@ export async function create(body, me) {
     const snap = (l) => ({ pid: l.pid, vkey: l.vkey, name: l.name, spec: l.spec, sku: l.sku, img: l.img, price: l.price, listPrice: l.listPrice || 0, qty: l.qty, amount: l.amount, cost: l.cost || 0, notes: l.notes || [] });
     tx.set(orderRef(no), {
       no, key, uid: me?.uid || null, buyer, receiver,
-      items: q.lines.map(snap), addonItems: q.addonLines.map(snap),
+      items: q.lines.map(snap), addonItems: [...q.addonLines.map(snap), ...q.giftLines.map((l) => ({ ...snap(l), gift: true }))],
       subtotal: q.subtotal, discounts: q.discounts, discountTotal: q.discountTotal,
       shipping: { id: q.shipping.id, name: q.shipping.name, type: q.shipping.type, fee: q.shipping.fee },
       pointsUsed: q.points.used, pointsValue: q.points.value, total: q.total,
       cost: all.reduce((a, l) => a + (l.cost || 0) * l.qty, 0),
       earn: q.earn, earnRules: q.earnRules, earned: false, couponId: q.coupon?.ok ? q.coupon.id : null,
-      payment: { id: pay.id, name: pay.name, status: q.total === 0 ? 'paid' : 'unpaid', paidAt: q.total === 0 ? t : null, transfer: '' },
+      want, invoice,
+      payment: { id: pay.id, name: pay.name, kind: pay.kind, status: q.total === 0 ? 'paid' : 'unpaid', paidAt: q.total === 0 ? t : null, transfer: '' },
       shipStatus: 'unshipped', trackingNo: '', status: 'processing',
-      note: str(body.note, 500), adminNote: '', tags: [], msgs: [], adminUnread: false, flagged: false, returnReq: null,
+      note, adminNote: '', tags: [], msgs: [], adminUnread: false, flagged: false, returnReq: null,
       log: [{ at: t, by: '顧客', text: '建立訂單' }],
       createdAt: t, updatedAt: t,
     });
@@ -288,7 +320,7 @@ export async function cancelStale() {
   let n = 0;
   for (const d of snap.docs) {
     const o = d.data();
-    if (o.payment.status === 'unpaid' && o.payment.id !== 'cod' && o.createdAt < before) {
+    if (o.payment.status === 'unpaid' && ['transfer', 'online'].includes(payKind(o.payment)) && o.createdAt < before) {
       await cancel(o.no, '系統', `超過 ${shopping.unpaidCancelDays} 天未付款`).catch(console.error);
       n++;
     }

@@ -4,7 +4,7 @@ import * as D from '../lib/db.js';
 import * as S from '../lib/settings.js';
 import * as O from '../lib/orders.js';
 import * as C from '../lib/customers.js';
-import { quote, context, unitPrice, variantOf } from '../lib/pricing.js';
+import { quote, context, unitPrice, variantOf, canSee } from '../lib/pricing.js';
 import { customer } from '../lib/auth.js';
 import { json, fail, readJSON, UserError, str, id } from '../lib/http.js';
 
@@ -41,7 +41,7 @@ function fillBlocks(blocks, products, cust, ctx, hide) {
   return (blocks || []).map((b) => {
     if (b.type === 'group') return { ...b, cols: (b.cols || []).map((col) => ({ blocks: fillBlocks(col.blocks, products, cust, ctx, hide) })) };
     if (b.type !== 'products') return b;
-    let list = products.filter((p) => p.on);
+    let list = products.filter((p) => p.on && canSee(p, cust));
     if (b.source === 'tag' && b.tag) list = list.filter((p) => (p.tags || []).includes(b.tag));
     if (b.source === 'ids') list = (b.ids || []).map((x) => list.find((p) => p.id === x)).filter(Boolean);
     const cards = sortCards(list.map((p) => card(p, cust, ctx, hide)), b.source === 'ids' ? '' : b.sort || 'new');
@@ -55,7 +55,13 @@ async function me(request) {
   return { m, cust: await D.one('customers', m.uid) };
 }
 
-const tagsOf = (products) => [...new Set(products.filter((p) => p.on).flatMap((p) => p.tags || []))];
+// 暫停營運：前台只能載入首頁的商店資訊
+async function mustBeOpen() {
+  const st = await S.get('store');
+  if (st.open === false) throw new UserError(st.closedMsg || '商店暫停營業中', 503);
+}
+
+const tagsOf = (products, cust) => [...new Set(products.filter((p) => p.on && canSee(p, cust)).flatMap((p) => p.tags || []))];
 
 export async function GET(request) {
   try {
@@ -64,15 +70,26 @@ export async function GET(request) {
     const { m, cust } = await me(request);
     const ctx = await context();
     const hide = ctx.customerSet.membersOnlyPrice && !cust;
+    if (a !== 'init') await mustBeOpen();
 
     if (a === 'init') {
       const [store, theme, third, shopping, menus, pages] = await Promise.all([S.get('store'), S.get('theme'), S.get('third'), S.get('shopping'), D.all('menus', 5000), D.all('pages', 3000)]);
+      const cs = ctx.customerSet;
+      const fields = cs.fields || { phone: cs.requirePhone ? 'required' : 'optional', birthday: cs.requireBirthday ? 'required' : 'optional', gender: 'optional', tel: 'hidden', address: 'hidden' };
+      const { domain, ...pubStore } = store;
       return json({
-        store, theme, third,
-        flags: { guestCheckout: shopping.guestCheckout, orderNote: shopping.orderNote, pointsRate: shopping.pointsRate, wishlist: ctx.customerSet.wishlist, returnRequest: ctx.customerSet.returnRequest, exchangeRequest: ctx.customerSet.exchangeRequest, requirePhone: ctx.customerSet.requirePhone, requireBirthday: ctx.customerSet.requireBirthday, lockBirthday: ctx.customerSet.lockBirthday, membersOnlyPrice: ctx.customerSet.membersOnlyPrice },
+        store: pubStore, theme, third,
+        flags: {
+          guestCheckout: shopping.guestCheckout, orderNote: shopping.orderNote, noteRequired: shopping.noteRequired, noteHint: shopping.noteHint, buyNow: shopping.buyNow !== false, backToTop: shopping.backToTop !== false,
+          terms: shopping.terms?.on ? shopping.terms.items.filter((t) => t.name) : [], authMsg: shopping.authMsg?.on ? shopping.authMsg.text : '',
+          invoice: shopping.invoice?.on ? shopping.invoice : null, domesticOnly: !!shopping.domesticOnly,
+          pointsRate: shopping.pointsRate, wishlist: cs.wishlist, returnRequest: cs.returnRequest, exchangeRequest: cs.exchangeRequest,
+          fields, requirePhone: fields.phone === 'required', requireBirthday: fields.birthday === 'required', lockBirthday: cs.lockBirthday, membersOnlyPrice: cs.membersOnlyPrice,
+          restockNotify: cs.restockNotify !== false, chatLine: cs.chatLine?.on && cs.chatLine.url ? cs.chatLine.url : '',
+        },
         menus: Object.fromEntries(menus.map((x) => [x.id, x.items || []])),
         pages: pages.filter((p) => !p.hidden).map((p) => ({ slug: p.slug, title: p.title, home: !!p.home })),
-        tags: tagsOf(ctx.products),
+        tags: tagsOf(ctx.products, cust),
       });
     }
 
@@ -96,27 +113,29 @@ export async function GET(request) {
       const tag = q.get('tag');
       const kw = str(q.get('q'), 50).toLowerCase();
       const min = Number(q.get('min')) || 0, max = Number(q.get('max')) || Infinity;
-      let list = ctx.products.filter((p) => p.on);
+      let list = ctx.products.filter((p) => p.on && canSee(p, cust));
       if (tag) list = list.filter((p) => (p.tags || []).includes(tag));
       if (kw) list = list.filter((p) => [p.name, p.sku, ...(p.tags || [])].join(' ').toLowerCase().includes(kw));
       let cards = list.map((p) => card(p, cust, ctx, hide)).filter((c) => hide || (c.price >= min && c.price <= max));
       cards = sortCards(cards, q.get('sort') || 'new');
       const page = Math.max(1, Number(q.get('page')) || 1);
-      return json({ total: cards.length, page, pages: Math.ceil(cards.length / PAGE), items: cards.slice((page - 1) * PAGE, page * PAGE), tags: tagsOf(ctx.products) });
+      return json({ total: cards.length, page, pages: Math.ceil(cards.length / PAGE), items: cards.slice((page - 1) * PAGE, page * PAGE), tags: tagsOf(ctx.products, cust) });
     }
 
     if (a === 'product') {
       const p = ctx.byId.get(id(q.get('id')));
       if (!p || !p.on) throw new UserError('這個商品已下架或不存在', 404);
+      if (!canSee(p, cust)) throw new UserError(cust ? '這個商品只開放給特定會員' : '這個商品只開放給會員，請先登入', cust ? 403 : 401);
       const gb = ctx.groupbuys.find((g) => g.pid === p.id && D.active(g));
       const qs = m ? (await D.db().collection('questions').where('pid', '==', p.id).where('uid', '==', m.uid).get()).docs.map((d) => ({ id: d.id, ...d.data() })) : [];
-      const related = ctx.products.filter((x) => x.on && x.id !== p.id && (x.tags || []).some((t) => (p.tags || []).includes(t))).slice(0, 8).map((x) => card(x, cust, ctx, hide));
+      const related = ctx.products.filter((x) => x.on && canSee(x, cust) && x.id !== p.id && (x.tags || []).some((t) => (p.tags || []).includes(t))).slice(0, 8).map((x) => card(x, cust, ctx, hide));
       return json({
         product: {
           id: p.id, name: p.name, sku: p.sku, desc: p.desc, images: p.images || [], tags: p.tags || [], specs: p.specs || [],
           variants: (p.variants || []).map((v) => { const up = unitPrice(p, v, cust, ctx); return { key: v.key, opts: v.opts, img: v.img || '', stock: v.stock, price: hide ? null : up.price, listPrice: hide ? null : up.listPrice > up.price ? up.listPrice : 0, notes: hide ? [] : up.notes }; }),
           groupbuy: gb ? { name: gb.name, sold: gb.sold || 0, tiers: gb.tiers, end: gb.end } : null,
           wished: !!cust?.wishlist?.includes(p.id),
+          restock: m ? (await D.db().collection('restock').where('pid', '==', p.id).where('email', '==', m.email).get()).docs.map((d) => d.data().vkey) : [],
         },
         questions: qs.sort((x, y) => y.updatedAt - x.updatedAt),
         related, hidePrice: hide,
@@ -143,13 +162,14 @@ export async function GET(request) {
       const o = await O.get(id(q.get('no')));
       if (!o || !(m && o.uid === m.uid) && q.get('k') !== o.key) throw new UserError('找不到這筆訂單', 404);
       if (m && o.uid === m.uid && o.customerUnread) await D.db().doc('orders/' + o.no).update({ customerUnread: false });
-      const [payment, shopping] = await Promise.all([S.get('payment'), S.get('shopping')]);
+      const [payment, shopping, shipping] = await Promise.all([S.get('payment'), S.get('shopping'), S.get('shipping')]);
       const { cost, log, adminNote, tags, flagged, adminUnread, key, items, addonItems, ...pub } = o;
       const strip = (l) => { const { cost: _c, ...r } = l; return r; };
       return json({
         order: { ...pub, items: items.map(strip), addonItems: (addonItems || []).map(strip), statusText: O.STATUS[o.status], payText: O.PAY[o.payment.status], shipText: O.SHIP[o.shipStatus] },
-        bank: o.payment.id === 'atm' ? payment.bank : null,
+        bank: O.payKind(o.payment) === 'transfer' ? payment.bank : null,
         transferTemplate: shopping.transferTemplate,
+        trackUrl: shipping.methods.find((x) => x.id === o.shipping.id)?.trackUrl || '',
         canCancel: ['processing'].includes(o.status) && o.shipStatus === 'unshipped',
         canReturn: ctx.customerSet.returnRequest && o.uid && o.shipStatus !== 'unshipped' && !['closed', 'cancelled', 'returning'].includes(o.status) && !o.returnReq,
         canExchange: ctx.customerSet.exchangeRequest && o.uid && o.shipStatus !== 'unshipped' && !['closed', 'cancelled', 'returning'].includes(o.status) && !o.returnReq,
@@ -158,7 +178,7 @@ export async function GET(request) {
 
     if (a === 'wishlist') {
       if (!cust) throw new UserError('請先登入', 401);
-      return json({ items: (cust.wishlist || []).map((x) => ctx.byId.get(x)).filter((p) => p?.on).map((p) => card(p, cust, ctx, false)) });
+      return json({ items: (cust.wishlist || []).map((x) => ctx.byId.get(x)).filter((p) => p?.on && canSee(p, cust)).map((p) => card(p, cust, ctx, false)) });
     }
 
     if (a === 'questions') {
@@ -177,6 +197,7 @@ export async function POST(request) {
   try {
     const body = await readJSON(request);
     const { m, cust } = await me(request);
+    await mustBeOpen();
     const a = body.a;
 
     if (a === 'quote') {
@@ -199,6 +220,20 @@ export async function POST(request) {
       if (!cust) throw new UserError('請先登入會員', 401);
       const pid = id(body.pid);
       await D.db().doc('customers/' + m.uid).update({ wishlist: body.on ? D.FieldValue.arrayUnion(pid) : D.FieldValue.arrayRemove(pid) });
+      return json({ ok: true });
+    }
+
+    // 貨到通知：缺貨的規格登記 Email，補貨後店家在後台看得到名單（之後串 Email 自動寄）
+    if (a === 'restock') {
+      const set = await S.get('customer');
+      if (set.restockNotify === false) throw new UserError('目前沒有開放貨到通知');
+      const email = (m?.email || str(body.email, 80)).toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(email)) throw new UserError('請填寫 Email');
+      const p = await D.one('products', id(body.pid));
+      const v = p && variantOf(p, body.vkey);
+      if (!v) throw new UserError('找不到這個商品');
+      const docId = `${p.id}_${(v.key || '-').replace(/[^\w-]/g, '_')}_${email.replace(/[^\w]/g, '_')}`.slice(0, 200);
+      await D.db().doc('restock/' + docId).set({ pid: p.id, vkey: v.key, pname: p.name, spec: v.key, email, uid: m?.uid || null, name: cust?.name || '', createdAt: Date.now(), notified: false });
       return json({ ok: true });
     }
 
@@ -235,7 +270,7 @@ export async function POST(request) {
 
     // 模擬付款（之後換成綠界回傳）
     if (a === 'pay') {
-      if (o.payment.id !== 'card') throw new UserError('這筆訂單不是線上付款');
+      if (O.payKind(o.payment) !== 'online') throw new UserError('這筆訂單不是線上付款');
       if (o.status === 'cancelled') throw new UserError('訂單已取消');
       if (o.payment.status === 'paid') return json({ ok: true });
       const ok = body.result === 'success';

@@ -7,10 +7,13 @@ const TYPES = {
   coupon: { name: '優惠碼', desc: '結帳輸入代碼折抵' },
   freeShip: { name: '免運', desc: '滿額或特定會員免運費' },
   points: { name: '購物金', desc: '滿額贈送、會員生日、加入會員送購物金' },
+  tagOrder: { name: '商品滿額折扣', desc: '指定標籤的商品買到幾件或多少錢折扣（例如秋冬商品滿 2000 折 200、過季任選 5 件 5 折）' },
+  bundle: { name: '商品選選樂', desc: '指定標籤的商品任選幾件特價（例如襪子任選 3 雙 299）' },
+  gift: { name: '訂單滿額贈', desc: '訂單滿額送贈品（送完為止）' },
 };
 const TRIG = { spend: '滿額贈送', birthday: '會員生日', signup: '會員加入' };
 
-function summary(d, groups) {
+function summary(d, groups, products = []) {
   const who = d.groups?.length ? d.groups.map((g) => (g === 'guest' ? '訪客' : g === 'member' ? '一般會員' : groups.find((x) => x.id === g)?.name || '?')).join('、') : '所有人';
   const when = d.start || d.end ? `${d.start || '即日起'} ~ ${d.end || '不限'}` : '不限期間';
   const off = d.mode === 'percent' ? `${d.percent}% off` : money(d.amount);
@@ -19,6 +22,9 @@ function summary(d, groups) {
     order: `滿 ${money(d.threshold)} 折 ${off}`,
     coupon: `代碼 ${d.code}・滿 ${money(d.threshold)} 折 ${off}・已使用 ${d.used || 0}${d.limit ? '/' + d.limit : ''} 次`,
     freeShip: `滿 ${money(d.threshold)} 免運`,
+    tagOrder: `${d.tags?.length ? '標籤「' + d.tags.join('、') + '」' : '全部商品'} ${d.unit === 'qty' ? `滿 ${d.threshold} 件` : `滿 ${money(d.threshold)}`} 折 ${d.mode === 'percent' ? d.percent + '%' : money(d.amount)}`,
+    bundle: `${d.tags?.length ? '標籤「' + d.tags.join('、') + '」' : '全部商品'} 任選 ${d.count} 件 ${money(d.price)}`,
+    gift: `滿 ${money(d.threshold)} 送「${products.find((p) => p.id === d.giftPid)?.name || '已刪除的商品'}」× ${d.giftQty || 1}`,
     points: d.trigger === 'spend' ? `滿 ${money(d.threshold)} 送 ${d.mode === 'percent' ? d.percent + '% 購物金' : d.amount + ' 點'}` : `送 ${d.amount} 點`,
   }[d.type];
   return `${s}・${who}・${when}`;
@@ -33,7 +39,7 @@ export async function discounts(el) {
     $('#list', el).innerHTML = Object.entries(TYPES).map(([t, info]) => {
       const list = data.discounts.filter((d) => d.type === t);
       return `<div class="disc-sec ${t}"><h3>${info.name} <span class="muted small" style="font-weight:400">${info.desc}</span>${t === 'points' ? '<span class="actions"><a class="btn sm" href="/admin/customers">大量贈送</a> <a class="btn sm" href="/admin/settings/shopping">折抵設定</a></span>' : ''}</h3>
-        ${list.length ? list.map((d) => `<div class="disc" data-id="${d.id}">${sw('', d.on, 'data-toggle')}<div class="grow"><b>${t === 'points' ? `<span class="muted" style="font-weight:400">${TRIG[d.trigger]}</span> ` : ''}${esc(d.name)}</b><small>${esc(summary(d, groups))}</small></div><button class="btn sm" data-edit>編輯</button><button class="btn sm danger" data-del aria-label="刪除">${icon('trash')}</button></div>`).join('') : '<p class="muted small">還沒有設定</p>'}
+        ${list.length ? list.map((d) => `<div class="disc" data-id="${d.id}">${sw('', d.on, 'data-toggle')}<div class="grow"><b>${t === 'points' ? `<span class="muted" style="font-weight:400">${TRIG[d.trigger]}</span> ` : ''}${esc(d.name)}</b><small>${esc(summary(d, groups, data.products))}</small></div><button class="btn sm" data-edit>編輯</button><button class="btn sm danger" data-del aria-label="刪除">${icon('trash')}</button></div>`).join('') : '<p class="muted small">還沒有設定</p>'}
         <button class="btn sm ghost" data-new="${t}">${icon('plus')}新增${info.name}</button></div>`;
     }).join('');
   };
@@ -67,7 +73,12 @@ export async function discounts(el) {
       ${type === 'points' ? `<label class="field"><span>贈送時機</span><select class="input" name="trigger">${Object.entries(TRIG).map(([v, n]) => `<option value="${v}"${d.trigger === v ? ' selected' : ''}>${n}</option>`).join('')}</select><span class="help">滿額贈送：訂單結案後發放。會員生日：生日當月的第一天凌晨發放。會員加入：註冊完成時發放。</span></label>` : ''}
       ${type === 'coupon' ? `<div class="row"><label class="field"><span>優惠碼 <em>*</em></span><input class="input" name="code" value="${esc(d.code || '')}" style="text-transform:uppercase"></label><label class="field"><span>總使用次數（0 = 不限）</span><input class="input" type="number" min="0" name="limit" value="${d.limit || 0}"></label></div><label class="check" style="margin-bottom:12px"><input type="checkbox" name="once" ${d.once ? 'checked' : ''}> 每位會員限用一次</label>` : ''}
       ${type === 'product' ? `<label class="field"><span>折扣 %（10 = 九折）<em>*</em></span><input class="input" type="number" min="1" max="99" name="percent" value="${d.percent || ''}" required></label><label class="field"><span>適用商品標籤（空白 = 全部商品，多個用逗號分開）</span><input class="input" name="tags" value="${esc(d.tags.join(', '))}" list="mkTags"></label><datalist id="mkTags">${data.tags.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>` : ''}
-      ${['order', 'coupon', 'freeShip'].includes(type) || (type === 'points' && d.trigger === 'spend') ? `<label class="field" data-th><span>訂單滿多少（0 = 不限）</span><input class="input" type="number" min="0" name="threshold" value="${d.threshold || 0}"></label>` : ''}
+      ${['tagOrder', 'bundle'].includes(type) ? `<label class="field"><span>適用商品標籤（空白 = 全部商品，多個用逗號分開）</span><input class="input" name="tags" value="${esc(d.tags.join(', '))}" list="mkTags2"></label><datalist id="mkTags2">${data.tags.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>` : ''}
+      ${type === 'tagOrder' ? `<div class="row"><label class="field"><span>門檻計算</span><select class="input" name="unit"><option value="amount"${d.unit !== 'qty' ? ' selected' : ''}>金額</option><option value="qty"${d.unit === 'qty' ? ' selected' : ''}>件數</option></select></label><label class="field"><span>滿多少（元或件）</span><input class="input" type="number" min="0" name="threshold" value="${d.threshold || 0}"></label></div>${offFields}<p class="muted small">打折時只算這些商品的金額。</p>` : ''}
+      ${type === 'bundle' ? `<div class="row"><label class="field"><span>任選幾件</span><input class="input" type="number" min="2" name="count" value="${d.count || 3}"></label><label class="field"><span>組合價（元）</span><input class="input" type="number" min="1" name="price" value="${d.price || ''}"></label></div><p class="muted small">顧客買越多件可以湊越多組，系統會用價格高的商品先湊，對顧客最划算。</p>` : ''}
+      ${type === 'gift' ? `<label class="field"><span>贈品</span><select class="input" name="giftPid"><option value="">請選擇商品</option>${data.products.map((p) => `<option value="${esc(p.id)}"${p.id === d.giftPid ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <div class="row"><label class="field"><span>規格</span><select class="input" name="giftVkey" id="gV"></select></label><label class="field"><span>數量</span><input class="input" type="number" min="1" name="giftQty" value="${d.giftQty || 1}"></label></div><p class="muted small">贈品會從庫存扣除，沒有庫存就不會送。建議把贈品商品設成下架，就不會被單獨購買。</p>` : ''}
+      ${['order', 'coupon', 'freeShip', 'gift'].includes(type) || (type === 'points' && d.trigger === 'spend') ? `<label class="field" data-th><span>訂單滿多少（0 = 不限）</span><input class="input" type="number" min="0" name="threshold" value="${d.threshold || 0}"></label>` : ''}
       ${['order', 'coupon'].includes(type) ? offFields : ''}
       ${type === 'points' ? `<div class="row"><label class="field" data-pm><span>贈送方式</span><select class="input" name="mode"><option value="amount"${d.mode === 'amount' ? ' selected' : ''}>固定點數</option><option value="percent"${d.mode === 'percent' ? ' selected' : ''}>訂單金額的 %</option></select></label><label class="field" data-m="amount"><span>點數</span><input class="input" type="number" min="0" name="amount" value="${d.amount || ''}"></label><label class="field" data-m="percent"><span>%</span><input class="input" type="number" min="0" max="100" name="percent" value="${d.percent || ''}"></label></div>` : ''}
       ${type === 'freeShip' ? `<div class="field"><span>適用運送方式（都不勾 = 全部）</span><div class="inline">${data.shipping.filter((s) => s.on).map((s) => `<label class="check"><input type="checkbox" name="shippingIds" value="${s.id}" ${d.shippingIds.includes(s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('')}</div></div>` : ''}
@@ -78,6 +89,15 @@ export async function discounts(el) {
     const f = $('#df', box);
     const sync = () => { const m = f.mode?.value; $$('[data-m]', f).forEach((x) => (x.hidden = x.dataset.m !== m)); };
     f.mode?.addEventListener('change', sync);
+    if (type === 'gift') {
+      const fillV = async () => {
+        const { products } = await api.get('pick');
+        const p = products.find((x) => x.id === f.giftPid.value);
+        $('#gV', box).innerHTML = (p?.variants || []).map((v) => `<option value="${esc(v.key)}"${v.key === d.giftVkey ? ' selected' : ''}>${esc(v.key || '單一規格')}（庫存 ${v.stock}）</option>`).join('');
+      };
+      f.giftPid.onchange = fillV;
+      fillV();
+    }
     f.trigger?.addEventListener('change', () => { close(); form(type, { ...d, ...Object.fromEntries(new FormData(f)), groups: d.groups, tags: d.tags, trigger: f.trigger.value }); });
     sync();
     $('[data-no]', box).onclick = close;
@@ -85,7 +105,7 @@ export async function discounts(el) {
       if (!f.reportValidity()) return;
       const fd = new FormData(f);
       const v = Object.fromEntries(fd);
-      const body = { ...v, id: d.id, type, on: !!fd.get('on'), once: !!fd.get('once'), groups: fd.getAll('groups'), shippingIds: fd.getAll('shippingIds'), tags: (v.tags || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean), threshold: +v.threshold || 0, amount: +v.amount || 0, percent: +v.percent || 0, limit: +v.limit || 0, priority: d.priority ?? data.discounts.length };
+      const body = { ...v, id: d.id, type, on: !!fd.get('on'), once: !!fd.get('once'), groups: fd.getAll('groups'), shippingIds: fd.getAll('shippingIds'), tags: (v.tags || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean), threshold: +v.threshold || 0, amount: +v.amount || 0, percent: +v.percent || 0, limit: +v.limit || 0, count: +v.count || 0, price: +v.price || 0, giftQty: +v.giftQty || 1, priority: d.priority ?? data.discounts.length };
       await busy(e.currentTarget, () => api.post('discountSave', body));
       close();
       toast('已儲存');

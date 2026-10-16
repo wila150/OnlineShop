@@ -4,12 +4,17 @@ import { CATALOG, DEFAULT_BLOCK, renderBlocks, mount } from '/shared/blocks.js';
 
 /* ---------- 頁面列表 ---------- */
 export async function pages(el) {
-  const { pages: list } = await api.get('pages');
+  const { pages: all } = await api.get('pages');
+  const list = all.filter((p) => !p.template);
+  const tpls = all.filter((p) => p.template);
   el.innerHTML = `<div class="page-head"><h1>頁面設計</h1><div class="actions"><a class="btn" href="/admin/theme">${icon('sparkle')}全站外觀</a><button class="btn primary" id="addP">${icon('plus')}新增頁面</button></div>
     <div class="sub">首頁和自訂分頁（例如品牌故事、門市資訊、活動頁）都在這裡編輯。商品列表頁和商品頁的樣式跟著全站外觀走。</div></div>
     <div class="card">${list.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>頁面</th><th>網址</th><th class="num">區塊</th><th>更新時間</th><th></th></tr></thead><tbody>
       ${list.map((p) => `<tr class="click" data-id="${p.id}"><td class="strong">${p.home ? icon('home') + ' ' : ''}${esc(p.title)} ${p.home ? pill('首頁', 'accent') : ''}${p.hidden ? pill('隱藏') : ''}</td><td class="muted">${p.home ? '/' : '/pages/' + esc(p.slug)}</td><td class="num">${p.blocks}</td><td>${fmt.time(p.updatedAt)}</td>
-        <td class="right nowrap"><a class="btn sm" href="${p.home ? '/' : '/pages/' + esc(p.slug)}" target="_blank" rel="noopener">${icon('eye')}</a> <button class="btn sm primary" data-edit>編輯</button>${p.home ? '' : ` <button class="btn sm danger" data-del aria-label="刪除">${icon('trash')}</button>`}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('還沒有頁面')}</div>`;
+        <td class="right nowrap"><a class="btn sm" href="${p.home ? '/' : '/pages/' + esc(p.slug)}" target="_blank" rel="noopener">${icon('eye')}</a> <button class="btn sm primary" data-edit>編輯</button>${p.home ? '' : ` <button class="btn sm danger" data-del aria-label="刪除">${icon('trash')}</button>`}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('還沒有頁面')}</div>
+    <div class="card"><h2>商品版型</h2><p class="muted small" style="margin-top:-8px">所有商品列表頁、商品頁共用的區塊。例如在商品頁下方放「購物須知」「尺寸表」、在列表頁上方放活動橫幅。</p>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>版型</th><th>顯示位置</th><th class="num">區塊</th><th>更新時間</th><th></th></tr></thead><tbody>
+      ${tpls.map((p) => `<tr class="click" data-id="${p.id}"><td class="strong">${esc(p.title)}</td><td class="muted">${p.id === 'tpl-list' ? '商品列表、搜尋結果的上方' : '每個商品頁的商品介紹下方'}</td><td class="num">${p.blocks}</td><td>${fmt.time(p.updatedAt)}</td><td class="right"><button class="btn sm primary" data-edit>編輯</button></td></tr>`).join('')}</tbody></table></div></div>`;
   $$('tr[data-id]', el).forEach((tr) => {
     tr.onclick = (e) => {
       if (e.target.closest('a')) return;
@@ -200,7 +205,9 @@ export async function editor(el, id) {
   const draw = () => {
     applyTheme(doc, theme);
     const blocks = fillProducts(page.blocks, pick.products);
-    doc.body.innerHTML = `<div class="fake-head"><b>${esc(settings.store.name)}</b>${(menus.top || []).slice(0, 6).map((m) => `<span>${esc(m.label)}</span>`).join('')}</div>${blocks.length ? renderBlocks(blocks, { menus, listButton: true, editing: true }) : '<div class="canvas-empty">從左邊把元件拖進來，開始設計這個頁面</div>'}`;
+    const tplNote = page.id === 'tpl-product' ? '<div class="canvas-empty" style="padding:40px">（這裡是商品圖片、價格、規格、商品介紹）<br>下面的區塊會出現在每一個商品頁</div>' : '';
+    const tplAfter = page.id === 'tpl-list' ? '<div class="canvas-empty" style="padding:40px">（這裡是商品列表）<br>上面的區塊會出現在商品列表和搜尋結果的上方</div>' : '';
+    doc.body.innerHTML = `<div class="fake-head"><b>${esc(settings.store.name)}</b>${(menus.top || []).slice(0, 6).map((m) => `<span>${esc(m.label)}</span>`).join('')}</div>${tplNote}${blocks.length ? renderBlocks(blocks, { menus, listButton: true, editing: true }) : '<div class="canvas-empty">從左邊把元件拖進來，開始設計這個頁面</div>'}${tplAfter}`;
     if (page.settings.bg) doc.body.style.background = page.settings.bg;
     $$('.blk', doc).forEach((s) => {
       s.draggable = true;

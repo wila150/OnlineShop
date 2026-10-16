@@ -8,7 +8,7 @@ import { initializeApp } from 'firebase-admin/app';
 import * as shop from './api/shop.js';
 import * as admin from './api/admin.js';
 import { cancelStale, refreshCustomer } from './lib/orders.js';
-import { birthdayPoints } from './lib/customers.js';
+import { birthdayPoints, autoBlacklist } from './lib/customers.js';
 import { all } from './lib/db.js';
 
 initializeApp();
@@ -37,10 +37,11 @@ export const api = onRequest({ cors: false, memory: '512MiB' }, async (req, res)
   res.status(r.status).send(Buffer.from(await r.arrayBuffer()));
 });
 
-// 每天凌晨 3 點：轉帳逾期自動取消、生日購物金、會員群組到期檢查
+// 每天凌晨 3 點：轉帳逾期自動取消、生日購物金、自動黑名單、會員群組到期檢查
 export const daily = onSchedule({ schedule: 'every day 03:00', timeZone: 'Asia/Taipei', timeoutSeconds: 540 }, async () => {
   console.log('逾期取消', await cancelStale());
   console.log('生日購物金', await birthdayPoints());
+  console.log('自動黑名單', await autoBlacklist());
   const now = Date.now();
   for (const c of (await all('customers')).filter((c) => c.uid && c.groupUntil && c.groupUntil < now)) await refreshCustomer(c.uid);
 });

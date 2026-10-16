@@ -8,7 +8,7 @@ export async function list(el) {
   let selected = [];
 
   el.innerHTML = `
-    <div class="page-head"><h1>商品管理</h1><div class="actions"><button class="btn" id="expBtn">${icon('download')}匯出</button><a class="btn primary" href="/admin/products/new">${icon('plus')}新增商品</a></div></div>
+    <div class="page-head"><h1>商品管理</h1><div class="actions"><a class="btn" href="/admin/products-bulk">${icon('edit')}大量更新</a><button class="btn" id="expBtn">${icon('download')}匯出</button><a class="btn primary" href="/admin/products/new">${icon('plus')}新增商品</a></div></div>
     <div class="card">
       <div class="tabs" id="tabs"></div>
       <div class="filters">
@@ -95,7 +95,9 @@ export async function edit(el, id) {
   const p = isNew
     ? { name: '', sku: '', desc: '', images: [], tags: [], on: true, price: 0, listPrice: 0, cost: 0, specs: [], variants: [{ key: '', opts: [], sku: '', price: 0, cost: 0, stock: 0 }], seoTitle: '', seoDesc: '' }
     : (await api.get('product', { id })).product;
-  const { tags: allTags } = await api.get('pick');
+  const { tags: allTags, shipping, groups } = await api.get('pick');
+  p.shipIds ||= [];
+  p.viewGroups ||= [];
   let dirty = false;
   guard(() => dirty);
   const mark = () => { dirty = true; };
@@ -127,6 +129,10 @@ export async function edit(el, id) {
         </div>
         <div>
           <div class="card"><h2>狀態</h2><div class="switch-row"><div class="sr-body"><b>上架</b><small>關閉後前台看不到這個商品</small></div><label class="sw"><input type="checkbox" name="on" ${p.on ? 'checked' : ''}><span></span></label></div></div>
+          <div class="card"><h2>適用物流</h2><p class="muted small" style="margin-top:-8px">都不勾＝全部運送方式都能用。購物車裡有多個商品時，只會出現大家都適用的運送方式。</p>
+            ${shipping.map((m) => `<label class="check" style="padding:4px 0"><input type="checkbox" name="shipIds" value="${esc(m.id)}" ${p.shipIds.includes(m.id) ? 'checked' : ''}> ${esc(m.name)}${m.on ? '' : ' <span class="pill">未啟用</span>'}</label>`).join('')}</div>
+          <div class="card"><h2>瀏覽權限</h2><p class="muted small" style="margin-top:-8px">都不勾＝所有人都看得到。勾了之後只有這些對象看得到、買得到（例如福袋只給 VIP）。</p>
+            ${[['guest', '訪客（未登入）'], ['member', '一般會員'], ...groups.map((g) => [g.id, g.name])].map(([k, n]) => `<label class="check" style="padding:4px 0"><input type="checkbox" name="viewGroups" value="${esc(k)}" ${p.viewGroups.includes(k) ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
           ${isNew ? '' : `<div class="card"><h2>銷售</h2><dl class="dl"><dt>已售出</dt><dd>${p.sold || 0} 件</dd><dt>建立</dt><dd>${fmt.time(p.createdAt)}</dd><dt>更新</dt><dd>${fmt.time(p.updatedAt)}</dd></dl></div>`}
         </div>
       </div>
@@ -204,7 +210,7 @@ export async function edit(el, id) {
     e.preventDefault();
     const d = new FormData(form);
     if (p.specs.some((s) => !s.name || !s.values.length)) return toast('每個規格都要有名稱和至少一個選項', true);
-    const body = { id: isNew ? undefined : id, name: d.get('name'), sku: d.get('sku'), listPrice: +d.get('listPrice') || 0, tags: tags.get(), images: p.images, on: !!d.get('on'), specs: p.specs, variants: p.variants, price: p.variants[0]?.price, cost: p.variants[0]?.cost, desc, seoTitle: d.get('seoTitle'), seoDesc: d.get('seoDesc') };
+    const body = { id: isNew ? undefined : id, name: d.get('name'), sku: d.get('sku'), listPrice: +d.get('listPrice') || 0, tags: tags.get(), images: p.images, on: !!d.get('on'), specs: p.specs, variants: p.variants, price: p.variants[0]?.price, cost: p.variants[0]?.cost, desc, seoTitle: d.get('seoTitle'), seoDesc: d.get('seoDesc'), shipIds: d.getAll('shipIds'), viewGroups: d.getAll('viewGroups') };
     const r = await busy($('#saveBtn', el), () => api.post('productSave', body));
     dirty = false;
     guard(null);
@@ -224,4 +230,112 @@ export async function edit(el, id) {
     toast('已複製（預設下架）');
     go('/admin/products/' + r.product.id);
   });
+}
+
+/* ---------- 適用物流：一次看所有商品能用哪些運送方式，可以批次設定 ---------- */
+export async function shipping(el) {
+  const [{ rows }, pick] = await Promise.all([api.get('products'), api.get('pick')]);
+  const full = await Promise.all(rows.map((r) => api.get('product', { id: r.id }).then((x) => x.product)));
+  let selected = [];
+  const st = { q: '', page: 1, size: 20 };
+  const name = (id) => pick.shipping.find((m) => m.id === id)?.name || id;
+  el.innerHTML = `<div class="page-head"><h1>適用物流</h1><div class="sub">每個商品可以指定能用哪些運送方式（例如大型商品不能超商取貨）。沒有指定的商品，全部運送方式都能用。</div></div>
+    <div class="card"><div class="filters"><div class="search-in"><input class="input" id="q" placeholder="搜尋商品名稱"><button aria-label="搜尋">${icon('search')}</button></div></div><div id="bulk"></div><div id="tbl"></div></div>`;
+  const draw = () => {
+    const list = full.filter((p) => !st.q || p.name.toLowerCase().includes(st.q));
+    selected = [];
+    drawBulk();
+    $('#tbl', el).innerHTML = list.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th class="chk"><input type="checkbox" aria-label="全選"></th><th></th><th>商品名稱</th><th>適用物流</th></tr></thead><tbody>${list.slice((st.page - 1) * st.size, st.page * st.size).map((p) => `<tr class="click" data-id="${p.id}"><td class="chk"><input type="checkbox" value="${p.id}" aria-label="選取"></td><td>${p.images?.[0] ? `<img class="thumb" src="${esc(p.images[0])}" alt="">` : '<span class="thumb"></span>'}</td><td>${esc(p.name)}</td><td>${p.shipIds?.length ? p.shipIds.map((x) => pill(name(x), 'accent')).join(' ') : '<span class="muted">全店物流</span>'}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('沒有商品');
+    if (list.length) $('#tbl', el).append(pager(list.length, st.page, st.size, (pg, sz) => { st.page = pg; st.size = sz; draw(); }));
+    $$('tbody tr', el).forEach((tr) => (tr.onclick = () => go('/admin/products/' + tr.dataset.id)));
+    const t = $('table', el); if (t) checkable(t, (ids) => { selected = ids; drawBulk(); });
+  };
+  const drawBulk = () => {
+    const b = $('#bulk', el);
+    if (!selected.length) { b.innerHTML = ''; return; }
+    b.innerHTML = `<div class="bulk">已選 ${selected.length} 個商品，設定適用物流：${pick.shipping.map((m) => `<label class="check"><input type="checkbox" value="${esc(m.id)}"> ${esc(m.name)}</label>`).join('')}<button class="btn sm primary" id="apply">套用</button><span class="muted small">都不勾＝全店物流</span></div>`;
+    $('#apply', b).onclick = async (e) => {
+      const ids = $$('input:checked', b).map((x) => x.value);
+      await busy(e.currentTarget, async () => { for (const pid of selected) { const p = full.find((x) => x.id === pid); p.shipIds = ids; await api.post('productSave', { ...p, id: pid }); } });
+      toast('已更新');
+      draw();
+    };
+  };
+  $('#q', el).oninput = (e) => { st.q = e.target.value.trim().toLowerCase(); st.page = 1; draw(); };
+  draw();
+}
+
+/* ---------- 貨到通知名單 ---------- */
+export async function restock(el) {
+  const { rows } = await api.get('restock');
+  let selected = [];
+  el.innerHTML = `<div class="page-head"><h1>貨到通知</h1><div class="sub">顧客在缺貨的商品頁按「貨到通知我」留下的名單。補貨後可以匯出名單寄信，或標記為已通知。（自動寄信之後串接）</div><div class="actions"><button class="btn" id="exp">${icon('download')}匯出名單</button></div></div>
+    <div class="card"><div id="bulk"></div>${rows.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th class="chk"><input type="checkbox" aria-label="全選"></th><th></th><th>商品</th><th>規格</th><th class="num">目前庫存</th><th>Email</th><th>登記時間</th><th>狀態</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr data-id="${esc(r.id)}"><td class="chk"><input type="checkbox" value="${esc(r.id)}" aria-label="選取"></td><td>${r.img ? `<img class="thumb" src="${esc(r.img)}" alt="">` : ''}</td><td><a href="/admin/products/${esc(r.pid)}">${esc(r.pname)}</a></td><td>${esc(r.spec || '-')}</td><td class="num ${r.stock > 0 ? '' : 'err'}">${r.stock ?? '已刪除'}</td><td>${esc(r.email)}</td><td>${fmt.time(r.createdAt)}</td><td>${r.notified ? pill('已通知', 'ok') : r.stock > 0 ? pill('已補貨，待通知', 'warn') : pill('等待補貨')}</td></tr>`).join('')}</tbody></table></div>` : emptyBox('還沒有人登記')}</div>`;
+  const drawBulk = () => {
+    const b = $('#bulk', el);
+    b.innerHTML = selected.length ? `<div class="bulk">已選 ${selected.length} 筆<button class="btn sm" data-op="done">標記為已通知</button><button class="btn sm danger" data-op="rm">刪除</button></div>` : '';
+    $$('[data-op]', b).forEach((x) => (x.onclick = async () => { await busy(x, () => api.post('restockDone', { ids: selected, remove: x.dataset.op === 'rm' })); toast('已更新'); restock(el); }));
+  };
+  const t = $('table', el); if (t) checkable(t, (ids) => { selected = ids; drawBulk(); });
+  $('#exp', el).onclick = () => {
+    const csv = '﻿' + [['商品', '規格', 'Email', '登記時間', '已通知'], ...rows.map((r) => [r.pname, r.spec, r.email, fmt.time(r.createdAt), r.notified ? '是' : ''])].map((x) => x.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: '貨到通知.csv' }).click();
+  };
+}
+
+/* ---------- 商品大量更新：像試算表一樣一次改所有規格的編號、價格、成本、庫存 ---------- */
+export async function bulk(el) {
+  const { rows } = await api.get('products');
+  const full = await Promise.all(rows.map((r) => api.get('product', { id: r.id }).then((x) => x.product)));
+  const showCost = can('cost');
+  const lines = full.flatMap((p) => p.variants.map((v) => ({ id: p.id, name: p.name, img: p.images?.[0] || '', key: v.key, sku: v.sku || '', price: v.price, listPrice: v.listPrice || 0, cost: v.cost ?? 0, stock: v.stock })));
+  const changed = new Map();
+  guard(() => changed.size > 0);
+  const st = { q: '' };
+  el.innerHTML = `<a class="back" href="/admin/products">‹ 回商品列表</a><div class="page-head"><h1>商品大量更新</h1><div class="sub">直接在表格裡修改，改過的格子會變色，按「儲存」一次更新。可以用 Tab 鍵跳下一格。</div><div class="actions"><button class="btn primary" id="save" disabled>儲存</button></div></div>
+    <div class="card"><div class="filters"><div class="search-in"><input class="input" id="q" placeholder="搜尋商品名稱或編號"><button aria-label="搜尋">${icon('search')}</button></div>
+      <span class="inline muted small">全部套用：<input class="input" type="number" id="setStock" placeholder="庫存" style="width:90px"><input class="input" type="number" id="addStock" placeholder="庫存加減" style="width:100px"><input class="input" type="number" id="pctPrice" placeholder="售價 ±%" style="width:100px"><button class="btn sm" id="applyAll">套用到篩選結果</button></span></div>
+      <div id="tbl"></div></div>`;
+  const F = ['sku', 'price', 'listPrice', ...(showCost ? ['cost'] : []), 'stock'];
+  const draw = () => {
+    const list = lines.filter((l) => !st.q || `${l.name} ${l.sku}`.toLowerCase().includes(st.q));
+    $('#tbl', el).innerHTML = `<div class="table-wrap" style="max-height:70vh"><table class="tbl vt"><thead><tr><th></th><th>商品名稱</th><th>規格</th><th>規格編號</th><th>售價</th><th>原價</th>${showCost ? '<th>成本</th>' : ''}<th>庫存</th></tr></thead><tbody>
+      ${list.map((l) => `<tr data-k="${esc(l.id + '|' + l.key)}"><td>${l.img ? `<img class="thumb" src="${esc(l.img)}" alt="" style="width:36px;height:36px">` : ''}</td><td class="ellipsis" style="max-width:240px">${esc(l.name)}</td><td>${esc(l.key || '-')}</td>${F.map((f) => `<td><input class="input" data-f="${f}" ${f === 'sku' ? '' : 'type="number" min="0"'} value="${esc(l[f])}" style="${changed.get(l.id + '|' + l.key)?.[f] !== undefined ? 'background:var(--warn-soft)' : ''}"></td>`).join('')}</tr>`).join('')}</tbody></table></div><p class="muted small">共 ${list.length} 個規格</p>`;
+  };
+  const set = (l, f, v) => {
+    const k = l.id + '|' + l.key;
+    l[f] = v;
+    changed.set(k, { ...(changed.get(k) || { id: l.id, key: l.key }), [f]: v });
+    $('#save', el).disabled = false;
+    $('#save', el).textContent = `儲存（${changed.size} 個規格）`;
+  };
+  $('#tbl', el).addEventListener('input', (e) => {
+    const tr = e.target.closest('tr');
+    const l = lines.find((x) => x.id + '|' + x.key === tr.dataset.k);
+    const f = e.target.dataset.f;
+    set(l, f, f === 'sku' ? e.target.value : Math.max(0, Math.round(+e.target.value || 0)));
+    e.target.style.background = 'var(--warn-soft)';
+  });
+  $('#q', el).oninput = (e) => { st.q = e.target.value.trim().toLowerCase(); draw(); };
+  $('#applyAll', el).onclick = () => {
+    const list = lines.filter((l) => !st.q || `${l.name} ${l.sku}`.toLowerCase().includes(st.q));
+    const ss = $('#setStock', el).value, as = $('#addStock', el).value, pp = $('#pctPrice', el).value;
+    if (ss === '' && as === '' && pp === '') return toast('先填要套用的數字', true);
+    for (const l of list) {
+      if (ss !== '') set(l, 'stock', Math.max(0, +ss));
+      if (as !== '') set(l, 'stock', Math.max(0, l.stock + +as));
+      if (pp !== '') set(l, 'price', Math.max(0, Math.round(l.price * (100 + +pp) / 100)));
+    }
+    draw();
+    toast(`已套用到 ${list.length} 個規格，記得按儲存`);
+  };
+  $('#save', el).onclick = async (e) => {
+    const r = await busy(e.currentTarget, () => api.post('variantsBulk', { rows: [...changed.values()] }));
+    changed.clear();
+    guard(null);
+    toast(`已更新 ${r.ok} 個規格`);
+    bulk(el);
+  };
+  draw();
 }

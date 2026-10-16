@@ -28,13 +28,17 @@ export async function saveProfile(me, body) {
   const phone = str(body.phone, 20);
   const birthday = /^\d{4}-\d{2}-\d{2}$/.test(body.birthday || '') ? body.birthday : '';
   if (!name) throw new UserError('請填寫姓名');
-  if (set.requirePhone && !phone) throw new UserError('請填寫手機號碼');
-  if (set.requireBirthday && !birthday && !cur?.birthday) throw new UserError('請填寫生日');
+  const F = set.fields || { phone: set.requirePhone ? 'required' : 'optional', birthday: set.requireBirthday ? 'required' : 'optional' };
+  if (F.phone === 'required' && !phone) throw new UserError('請填寫手機號碼');
+  if (F.birthday === 'required' && !birthday && !cur?.birthday) throw new UserError('請填寫生日');
+  if (F.gender === 'required' && !str(body.gender, 10)) throw new UserError('請選擇性別');
+  if (F.tel === 'required' && !str(body.tel, 20)) throw new UserError('請填寫市話');
+  if (F.address === 'required' && !str(body.homeAddress, 200) && !cur?.homeAddress) throw new UserError('請填寫地址');
   const t = Date.now();
   if (!cur) {
     const groupId = await codeGroup(me.email, body.code);
     const doc = {
-      uid: me.uid, email: me.email, name, phone, birthday, gender: str(body.gender, 10),
+      uid: me.uid, email: me.email, name, phone, birthday, gender: str(body.gender, 10), tel: str(body.tel, 20), homeAddress: str(body.homeAddress, 200),
       groupId, groupUntil: null, groupManual: !!groupId, points: 0, pointsLog: [], wishlist: [], coupons: [],
       blacklisted: false, note: '', tags: [], address: null, newsletter: !!body.newsletter,
       stats: { orders: 0, spent: 0, firstOrderAt: null, lastOrderAt: null },
@@ -46,7 +50,7 @@ export async function saveProfile(me, body) {
       if (d.amount > 0) await givePoints(me.uid, d.amount, d.name || '加入會員禮');
     }
   } else {
-    const patch = { name, phone, gender: str(body.gender, 10), newsletter: !!body.newsletter };
+    const patch = { name, phone, gender: str(body.gender, 10), tel: str(body.tel, 20), homeAddress: str(body.homeAddress, 200), newsletter: !!body.newsletter };
     if (birthday && (!cur.birthday || !set.lockBirthday)) patch.birthday = birthday;
     if (body.address) patch.address = { name: str(body.address.name, 30), phone: str(body.address.phone, 20), address: str(body.address.address, 200), zip: str(body.address.zip, 10) };
     await ref.update(patch);
@@ -169,4 +173,22 @@ export async function birthdayPoints() {
     await D.db().doc('customers/' + c.uid).update({ birthdayGiven: year });
   }
   return list.length;
+}
+
+// 定時（每天）：計算期間內「已退貨」的訂單達門檻就加入黑名單
+export async function autoBlacklist() {
+  const set = await S.get('customer');
+  if (!set.blacklistAuto || !set.blacklistReturns) return 0;
+  const since = Date.now() - (set.blacklistMonths || 6) * 30.4 * DAY;
+  const snap = await D.db().collection('orders').where('shipStatus', '==', 'returned').get();
+  const count = new Map();
+  for (const d of snap.docs) { const o = d.data(); if (o.uid && o.updatedAt >= since) count.set(o.uid, (count.get(o.uid) || 0) + 1); }
+  let n = 0;
+  for (const [uid, c] of count) {
+    if (c < set.blacklistReturns) continue;
+    const ref = D.db().doc('customers/' + uid);
+    const cur = (await ref.get()).data();
+    if (cur && !cur.blacklisted) { await ref.update({ blacklisted: true, note: `${cur.note ? cur.note + '\n' : ''}${D.twDate()} 系統自動加入黑名單（${c} 筆退貨）` }); n++; }
+  }
+  return n;
 }

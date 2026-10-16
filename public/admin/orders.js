@@ -136,7 +136,7 @@ export async function detail(el, no) {
     <div class="split">
       <div>
         <div class="card"><h2>商品明細</h2>
-          <div class="od-lines">${lines.map((l) => `<div class="ln">${l.img ? `<img src="${esc(l.img)}" alt="">` : '<span class="ph"></span>'}<div>${l.addon ? pill('加購', 'accent') + ' ' : ''}<a href="/admin/products/${esc(l.pid)}">${esc(l.name)}</a>${l.spec ? `<div class="muted small">${esc(l.spec)}</div>` : ''}${l.sku ? `<div class="muted small">編號 ${esc(l.sku)}</div>` : ''}${l.notes?.length ? `<div class="muted small">${esc(l.notes.join('、'))}</div>` : ''}</div><span class="muted nowrap">${money(l.price)} × ${l.qty}</span><b class="nowrap">${money(l.amount)}</b></div>`).join('')}</div>
+          <div class="od-lines">${lines.map((l) => `<div class="ln">${l.img ? `<img src="${esc(l.img)}" alt="">` : '<span class="ph"></span>'}<div>${l.addon ? pill(l.gift ? '贈品' : '加購', 'accent') + ' ' : ''}<a href="/admin/products/${esc(l.pid)}">${esc(l.name)}</a>${l.spec ? `<div class="muted small">${esc(l.spec)}</div>` : ''}${l.sku ? `<div class="muted small">編號 ${esc(l.sku)}</div>` : ''}${l.notes?.length ? `<div class="muted small">${esc(l.notes.join('、'))}</div>` : ''}</div><span class="muted nowrap">${money(l.price)} × ${l.qty}</span><b class="nowrap">${money(l.amount)}</b></div>`).join('')}</div>
           <div class="sum"><div><span>商品小計</span><span>${money(o.subtotal)}</span></div>
             ${o.discounts.map((d) => `<div><span>${esc(d.name)}</span><span class="err">−${money(d.amount)}</span></div>`).join('')}
             ${o.pointsUsed ? `<div><span>購物金折抵（${o.pointsUsed} 點）</span><span class="err">−${money(o.pointsValue)}</span></div>` : ''}
@@ -171,7 +171,9 @@ export async function detail(el, no) {
           ${o.payment.transfer ? `<dt>匯款通知</dt><dd style="white-space:pre-wrap">${esc(o.payment.transfer)}</dd>` : ''}
           <dt>運送方式</dt><dd>${esc(o.shipping.name)}</dd>
           <dt>收件人</dt><dd>${esc(recv.name)}　${esc(recv.phone)}</dd>
-          ${recv.store ? `<dt>取貨門市</dt><dd>${esc(recv.store)}</dd>` : ''}${recv.address ? `<dt>地址</dt><dd>${esc(recv.zip || '')} ${esc(recv.address)}</dd>` : ''}
+          ${recv.store ? `<dt>取貨門市</dt><dd>${esc(recv.store)}</dd>` : ''}
+          ${o.want?.date || o.want?.time ? `<dt>期望到貨</dt><dd>${esc([o.want.date, o.want.time].filter(Boolean).join(' '))}</dd>` : ''}
+          ${o.invoice ? `<dt>發票</dt><dd>${esc({ personal: '個人電子發票', company: '公司', carrier: '手機載具', donate: '捐贈' }[o.invoice.type])} ${esc([o.invoice.taxId, o.invoice.title, o.invoice.carrier, o.invoice.donateCode].filter(Boolean).join(' '))}</dd>` : ''}${recv.address ? `<dt>地址</dt><dd>${esc(recv.zip || '')} ${esc(recv.address)}</dd>` : ''}
         </dl></div>
       </div>
     </div>`;
@@ -197,11 +199,13 @@ export async function detail(el, no) {
     $('[data-no]', box).onclick = close;
     $('[data-ok]', box).onclick = async (e) => { await busy(e.currentTarget, () => api.post('orderUpdate', { no, status: 'cancelled', reason: $('[name=reason]', box).value })); close(); toast('訂單已取消'); reload(); };
   });
-  $('#printBtn', el).onclick = () => {
+  $('#printBtn', el).onclick = async () => {
+    let sender = {};
+    try { sender = (await api.get('settings')).settings.shopping.sender || {}; } catch {}
     const w = window.open('', '_blank');
     w.document.write(`<!doctype html><meta charset="utf-8"><title>出貨單 ${o.no}</title><style>body{font-family:sans-serif;padding:24px;font-size:14px}table{width:100%;border-collapse:collapse;margin:16px 0}td,th{border:1px solid #ccc;padding:6px 8px;text-align:left}.r{text-align:right}</style>
-      <h2>出貨單 ${o.no}</h2><p>下單：${fmt.time(o.createdAt)}<br>收件人：${esc(recv.name)}　${esc(recv.phone)}<br>${esc(recv.store || ((recv.zip || '') + ' ' + recv.address))}<br>運送：${esc(o.shipping.name)}　付款：${esc(o.payment.name)}（${PAY[o.payment.status]}）</p>
-      <table><tr><th>商品</th><th>規格</th><th class="r">數量</th><th class="r">小計</th></tr>${lines.map((l) => `<tr><td>${l.addon ? '【加購】' : ''}${esc(l.name)}</td><td>${esc(l.spec || '')}</td><td class="r">${l.qty}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table>
+      <h2>出貨單 ${o.no}</h2>${sender.name ? `<p>寄件人：${esc(sender.name)}　${esc(sender.phone || '')}　${esc(sender.address || '')}</p>` : ''}${o.want?.date || o.want?.time ? `<p><b>期望到貨：${esc([o.want.date, o.want.time].filter(Boolean).join(' '))}</b></p>` : ''}<p>下單：${fmt.time(o.createdAt)}<br>收件人：${esc(recv.name)}　${esc(recv.phone)}<br>${esc(recv.store || ((recv.zip || '') + ' ' + recv.address))}<br>運送：${esc(o.shipping.name)}　付款：${esc(o.payment.name)}（${PAY[o.payment.status]}）</p>
+      <table><tr><th>商品</th><th>規格</th><th class="r">數量</th><th class="r">小計</th></tr>${lines.map((l) => `<tr><td>${l.addon ? (l.gift ? '【贈品】' : '【加購】') : ''}${esc(l.name)}</td><td>${esc(l.spec || '')}</td><td class="r">${l.qty}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table>
       <p class="r">訂單金額：<b>${money(o.total)}</b></p>${o.note ? `<p>顧客留言：${esc(o.note)}</p>` : ''}<script>print()<\/script>`);
     w.document.close();
   };
