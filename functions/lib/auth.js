@@ -61,6 +61,8 @@ export async function admin(request) {
   if (ownerEmails().includes(email)) return { email, name: user.name || email, role: 'owner', roleName: '老闆', perms: ALL };
   const doc = (await getFirestore().doc('admins/' + email).get()).data();
   if (!doc || doc.disabled) throw new UserError(`${email} 沒有後台權限，請老闆到「設定 → 後台帳號」加入這個 Email`, 403);
+  // 個別勾選權限的員工
+  if (doc.role === 'custom') return { email, name: doc.name || user.name || email, role: 'custom', roleName: '自訂權限', perms: (doc.perms || []).filter((k) => ALL.includes(k)) };
   const role = (await listRoles()).find((r) => r.id === doc.role);
   if (!role) throw new UserError('您的角色已被刪除，請老闆重新指定角色', 403);
   return { email, name: doc.name || user.name || email, role: role.id, roleName: role.name, perms: role.perms };
@@ -86,12 +88,23 @@ export async function listAdmins() {
   return [...owners.map((e) => ({ email: e, name: '', role: 'owner', fixed: true })), ...list];
 }
 
-export async function saveAdmin({ email, name, role, disabled }) {
+// 處理／匯出一定要能查看
+function withView(perms) {
+  perms = [...new Set((perms || []).filter((k) => ALL.includes(k)))];
+  if (perms.some((k) => k.startsWith('orders')) && !perms.includes('orders')) perms.push('orders');
+  if (perms.some((k) => k.startsWith('customers')) && !perms.includes('customers')) perms.push('customers');
+  return perms;
+}
+
+// role 是角色 id，或 'custom'（這位員工個別勾選 perms）
+export async function saveAdmin({ email, name, role, disabled, perms }) {
   email = normEmail(email);
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new UserError('Email 格式不對');
   if (ownerEmails().includes(email)) throw new UserError('老闆帳號的權限是固定的（在 OWNER_EMAILS 設定）');
-  if (!(await listRoles()).some((r) => r.id === role)) throw new UserError('請選角色');
-  await getFirestore().doc('admins/' + email).set({ name: String(name || '').trim().slice(0, 20), role, disabled: !!disabled });
+  if (role !== 'custom' && !(await listRoles()).some((r) => r.id === role)) throw new UserError('請選角色');
+  const doc = { name: String(name || '').trim().slice(0, 20), role, disabled: !!disabled };
+  if (role === 'custom') doc.perms = withView(perms);
+  await getFirestore().doc('admins/' + email).set(doc);
   return listAdmins();
 }
 
@@ -105,10 +118,7 @@ export async function removeAdmin({ email }) {
 export async function saveRole({ id, name, perms }) {
   name = String(name || '').trim().slice(0, 20);
   if (!name) throw new UserError('請填角色名稱');
-  perms = [...new Set((perms || []).filter((k) => ALL.includes(k)))];
-  // 有處理／匯出權限一定要能查看
-  if (perms.some((k) => k.startsWith('orders')) && !perms.includes('orders')) perms.push('orders');
-  if (perms.some((k) => k.startsWith('customers')) && !perms.includes('customers')) perms.push('customers');
+  perms = withView(perms);
   const list = [...(await listRoles())];
   if (list.some((r) => r.name === name && r.id !== id)) throw new UserError('已經有同名的角色');
   const i = list.findIndex((r) => r.id === id);
