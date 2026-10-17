@@ -1,5 +1,5 @@
 // 後台核心：登入、選單、路由，以及各頁共用的小元件
-import { api as rawApi, auth, authMessage } from '/shared/fb.js';
+import { api as rawApi, auth, authMessage, googleSignIn } from '/shared/fb.js';
 import { esc, money } from '/shared/blocks.js';
 
 export { esc, money };
@@ -483,7 +483,7 @@ async function start() {
     err.textContent = msg || '';
   };
   $('#googleLogin').onclick = async () => {
-    try { const p = new F.GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' }); await F.signInWithPopup(F.auth, p); start(); } catch (e) { showLogin(authMessage(e)); }
+    try { await googleSignIn(); start(); } catch (e) { showLogin(authMessage(e)); }
   };
   if (!F.auth.currentUser) return showLogin();
   try {

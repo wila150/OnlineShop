@@ -1,5 +1,5 @@
 // 前台購物網站（單頁應用，網址由 History API 切換）
-import { api, auth, authMessage } from '/shared/fb.js';
+import { api, auth, authMessage, googleSignIn, inAppBrowser } from '/shared/fb.js';
 import { esc, money, renderBlocks, mount, menuHTML, productCard } from '/shared/blocks.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -630,6 +630,7 @@ function viewAuth(next, tab = 'login') {
       ${tab === 'login' ? '<p style="text-align:right;margin:8px 0 0"><button type="button" class="linkbtn" id="forgot">忘記密碼？</button></p>' : ''}
     </form>
     <div class="or">或</div>
+    ${inAppBrowser() && inAppBrowser() !== 'LINE' ? `<p class="muted" style="font-size:.85rem;text-align:center">在 ${inAppBrowser()} 裡無法用 Google 登入，請點右上角「⋯」用瀏覽器開啟</p>` : ''}
     <button class="btn block ghost" id="google">使用 Google 帳號${tab === 'login' ? '登入' : '註冊'}</button>
   </div></div>`;
   $$('.auth-tabs button').forEach((b) => b.addEventListener('click', () => viewAuth(next, b.dataset.t)));
@@ -646,7 +647,7 @@ function viewAuth(next, tab = 'login') {
   });
   $('#google').addEventListener('click', async () => {
     const F = await auth();
-    try { const p = new F.GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' }); await F.signInWithPopup(F.auth, p); await done(); } catch (ex) { err(ex); }
+    try { await googleSignIn(); await done(); } catch (ex) { err(ex); }
   });
   $('#forgot')?.addEventListener('click', async () => {
     const email = $('[name=email]').value;

@@ -42,3 +42,29 @@ export async function api(path, { method = 'GET', body, raw } = {}) {
   if (!r.ok || data.error) { const e = new Error(data.error || '發生錯誤'); e.status = r.status; throw e; }
   return data;
 }
+
+// LINE、Facebook、Instagram 等 App 內建的瀏覽器，Google 不允許在裡面登入
+export function inAppBrowser() {
+  const ua = navigator.userAgent;
+  if (/\bLine\//i.test(ua)) return 'LINE';
+  if (/FBAN|FBAV|FB_IAB/i.test(ua)) return 'Facebook';
+  if (/Instagram/i.test(ua)) return 'Instagram';
+  if (/MicroMessenger|WhatsApp|Threads/i.test(ua)) return 'App';
+  return '';
+}
+
+// Google 登入：在 LINE 裡自動改用手機瀏覽器開啟同一頁；其他 App 請顧客改用瀏覽器
+export async function googleSignIn() {
+  const app = inAppBrowser();
+  if (app === 'LINE') {
+    const u = new URL(location.href);
+    u.searchParams.set('openExternalBrowser', '1');
+    location.href = u.toString();
+    return new Promise(() => {}); // 頁面會跳走
+  }
+  if (app) throw new Error(`${app} 裡面不能用 Google 登入，請點右上角「⋯」選「用瀏覽器開啟」，或改用 Email 登入`);
+  const F = await auth();
+  const p = new F.GoogleAuthProvider();
+  p.setCustomParameters({ prompt: 'select_account' });
+  return F.signInWithPopup(F.auth, p);
+}
